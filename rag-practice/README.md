@@ -63,4 +63,8 @@
 └── README.md            # 项目说明文档
 ```
 
+## 📚 5. 参考
+* [从零搭建企业私有知识库：RAG + 大模型实战](https://developer.aliyun.com/article/1726467)
+
+
 streamlit run web-ui.py --server.port 8501
