@@ -211,3 +211,6 @@ __marimo__/
 */vector_db/*
 *.iml
 */*/volumes
+*/*/*/.chainlit
+*/*/*/vector_index
+*/*/*/chainlit.md
