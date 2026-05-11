@@ -2,9 +2,10 @@
 数据准备模块
 """
 
+import os
+import pickle
 import logging
 import hashlib
-from pathlib import Path
 from typing import List, Dict, Any
 
 from langchain_text_splitters import MarkdownHeaderTextSplitter
@@ -42,6 +43,57 @@ class DataPreparationModule:
         self.documents: List[Document] = []  # 父文档（完整食谱）
         self.chunks: List[Document] = []     # 子文档（按标题分割的小块）
         self.parent_child_map: Dict[str, str] = {}  # 子块ID -> 父文档ID的映射
+        # 用于增量更新的缓存状态
+        self.cache_path = os.path.join(str(Path(data_path).parent), "knowledge_cache.pkl")
+        self.file_hashes: Dict[str, str] = {} # 记录文件路径及其最后修改时间的哈希
+
+    def load_state_from_cache(self) -> bool:
+        """尝试从本地加载已解析的文档和分块状态"""
+        if os.path.exists(self.cache_path):
+            try:
+                with open(self.cache_path, 'rb') as f:
+                    cache_data = pickle.load(f)
+                    self.documents = cache_data.get('documents', [])
+                    self.chunks = cache_data.get('chunks', [])
+                    self.parent_child_map = cache_data.get('parent_child_map', {})
+                    self.file_hashes = cache_data.get('file_hashes', {})
+                logger.info(f"✅ 从缓存成功加载 {len(self.documents)} 个文档状态，实现秒级启动！")
+                return True
+            except Exception as e:
+                logger.warning(f"加载缓存失败，将重新解析: {e}")
+        return False
+
+    def save_state_to_cache(self):
+        """将当前文档和分块状态保存到本地缓存"""
+        cache_data = {
+            'documents': self.documents,
+            'chunks': self.chunks,
+            'parent_child_map': self.parent_child_map,
+            'file_hashes': self.file_hashes
+        }
+        try:
+            with open(self.cache_path, 'wb') as f:
+                pickle.dump(cache_data, f)
+            logger.info("✅ 文档解析状态已持久化到本地缓存")
+        except Exception as e:
+            logger.error(f"保存缓存失败: {e}")
+
+    def check_for_updates(self) -> List[Path]:
+        """检查哪些文件是新增或被修改过的"""
+        data_path_obj = Path(self.data_path)
+        updated_files = []
+
+        for md_file in data_path_obj.rglob("*.md"):
+            # 使用文件的最后修改时间作为指纹
+            current_mtime = str(os.path.getmtime(md_file))
+            file_key = str(md_file)
+
+            # 如果是新文件，或者文件被修改过
+            if file_key not in self.file_hashes or self.file_hashes[file_key] != current_mtime:
+                updated_files.append(md_file)
+                self.file_hashes[file_key] = current_mtime # 更新指纹
+
+        return updated_files
     
     def load_documents(self) -> List[Document]:
         """
