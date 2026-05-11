@@ -15,6 +15,7 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+
 class DataPreparationModule:
     """数据准备模块 - 负责数据加载、清洗和预处理"""
     # 统一维护的分类与难度配置，供外部复用，避免关键词重复定义
@@ -31,7 +32,7 @@ class DataPreparationModule:
     }
     CATEGORY_LABELS = list(set(CATEGORY_MAPPING.values()))
     DIFFICULTY_LABELS = ['非常简单', '简单', '中等', '困难', '非常困难']
-    
+
     def __init__(self, data_path: str):
         """
         初始化数据准备模块
@@ -41,11 +42,11 @@ class DataPreparationModule:
         """
         self.data_path = data_path
         self.documents: List[Document] = []  # 父文档（完整食谱）
-        self.chunks: List[Document] = []     # 子文档（按标题分割的小块）
+        self.chunks: List[Document] = []  # 子文档（按标题分割的小块）
         self.parent_child_map: Dict[str, str] = {}  # 子块ID -> 父文档ID的映射
         # 用于增量更新的缓存状态
         self.cache_path = os.path.join(str(Path(data_path).parent), "knowledge_cache.pkl")
-        self.file_hashes: Dict[str, str] = {} # 记录文件路径及其最后修改时间的哈希
+        self.file_hashes: Dict[str, str] = {}  # 记录文件路径及其最后修改时间的哈希
 
     def load_state_from_cache(self) -> bool:
         """尝试从本地加载已解析的文档和分块状态"""
@@ -57,7 +58,7 @@ class DataPreparationModule:
                     self.chunks = cache_data.get('chunks', [])
                     self.parent_child_map = cache_data.get('parent_child_map', {})
                     self.file_hashes = cache_data.get('file_hashes', {})
-                logger.info(f"✅ 从缓存成功加载 {len(self.documents)} 个文档状态，实现秒级启动！")
+                logger.info(f"✅ 从缓存成功加载 {len(self.documents)} 个文档！")
                 return True
             except Exception as e:
                 logger.warning(f"加载缓存失败，将重新解析: {e}")
@@ -91,10 +92,10 @@ class DataPreparationModule:
             # 如果是新文件，或者文件被修改过
             if file_key not in self.file_hashes or self.file_hashes[file_key] != current_mtime:
                 updated_files.append(md_file)
-                self.file_hashes[file_key] = current_mtime # 更新指纹
+                self.file_hashes[file_key] = current_mtime  # 更新指纹
 
         return updated_files
-    
+
     def load_documents(self) -> List[Document]:
         """
         加载文档数据
@@ -103,7 +104,7 @@ class DataPreparationModule:
             加载的文档列表
         """
         logger.info(f"正在从 {self.data_path} 加载文档...")
-        
+
         # 直接读取Markdown文件以保持原始格式
         documents = []
         data_path_obj = Path(self.data_path)
@@ -135,15 +136,15 @@ class DataPreparationModule:
 
             except Exception as e:
                 logger.warning(f"读取文件 {md_file} 失败: {e}")
-        
+
         # 增强文档元数据
         for doc in documents:
             self._enhance_metadata(doc)
-        
+
         self.documents = documents
         logger.info(f"成功加载 {len(documents)} 个文档")
         return documents
-    
+
     def _enhance_metadata(self, doc: Document):
         """
         增强文档元数据
@@ -153,14 +154,14 @@ class DataPreparationModule:
         """
         file_path = Path(doc.metadata.get('source', ''))
         path_parts = file_path.parts
-        
+
         # 提取菜品分类
         doc.metadata['category'] = '其他'
         for key, value in self.CATEGORY_MAPPING.items():
             if key in path_parts:
                 doc.metadata['category'] = value
                 break
-        
+
         # 提取菜品名称
         doc.metadata['dish_name'] = file_path.stem
 
@@ -188,7 +189,7 @@ class DataPreparationModule:
     def get_supported_difficulties(cls) -> List[str]:
         """对外提供支持的难度标签列表"""
         return cls.DIFFICULTY_LABELS
-    
+
     def chunk_documents(self) -> List[Document]:
         """
         Markdown结构感知分块
@@ -225,9 +226,9 @@ class DataPreparationModule:
         """
         # 定义要分割的标题层级
         headers_to_split_on = [
-            ("#", "主标题"),      # 菜品名称
-            ("##", "二级标题"),   # 必备原料、计算、操作等
-            ("###", "三级标题")   # 简易版本、复杂版本等
+            ("#", "主标题"),  # 菜品名称
+            ("##", "二级标题"),  # 必备原料、计算、操作等
+            ("###", "三级标题")  # 简易版本、复杂版本等
         ]
 
         # 创建Markdown分割器
@@ -270,7 +271,7 @@ class DataPreparationModule:
                         "chunk_id": child_id,
                         "parent_id": parent_id,
                         "doc_type": "child",  # 标记为子文档
-                        "chunk_index": i      # 在父文档中的位置
+                        "chunk_index": i  # 在父文档中的位置
                     })
 
                     # 建立父子映射关系
@@ -297,7 +298,7 @@ class DataPreparationModule:
             过滤后的文档列表
         """
         return [doc for doc in self.documents if doc.metadata.get('category') == category]
-    
+
     def filter_documents_by_difficulty(self, difficulty: str) -> List[Document]:
         """
         按难度过滤文档
@@ -309,7 +310,7 @@ class DataPreparationModule:
             过滤后的文档列表
         """
         return [doc for doc in self.documents if doc.metadata.get('difficulty') == difficulty]
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """
         获取数据统计信息
@@ -337,9 +338,10 @@ class DataPreparationModule:
             'total_chunks': len(self.chunks),
             'categories': categories,
             'difficulties': difficulties,
-            'avg_chunk_size': sum(chunk.metadata.get('chunk_size', 0) for chunk in self.chunks) / len(self.chunks) if self.chunks else 0
+            'avg_chunk_size': sum(chunk.metadata.get('chunk_size', 0) for chunk in self.chunks) / len(
+                self.chunks) if self.chunks else 0
         }
-    
+
     def export_metadata(self, output_path: str):
         """
         导出元数据到JSON文件
@@ -348,7 +350,7 @@ class DataPreparationModule:
             output_path: 输出文件路径
         """
         import json
-        
+
         metadata_list = []
         for doc in self.documents:
             metadata_list.append({
@@ -358,10 +360,10 @@ class DataPreparationModule:
                 'difficulty': doc.metadata.get('difficulty'),
                 'content_length': len(doc.page_content)
             })
-        
+
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(metadata_list, f, ensure_ascii=False, indent=2)
-        
+
         logger.info(f"元数据已导出到: {output_path}")
 
     def get_parent_documents(self, child_chunks: List[Document]) -> List[Document]:
@@ -394,8 +396,8 @@ class DataPreparationModule:
 
         # 按相关性排序（匹配次数多的排在前面）
         sorted_parent_ids = sorted(parent_relevance.keys(),
-                                 key=lambda x: parent_relevance[x],
-                                 reverse=True)
+                                   key=lambda x: parent_relevance[x],
+                                   reverse=True)
 
         # 构建去重后的父文档列表
         parent_docs = []

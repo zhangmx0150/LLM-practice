@@ -14,9 +14,10 @@ from langchain_core.output_parsers import StrOutputParser
 
 logger = logging.getLogger(__name__)
 
+
 class GenerationIntegrationModule:
     """生成集成模块 - 负责LLM集成和回答生成"""
-    
+
     def __init__(self, model_name: str = "qwen3.6-plus", temperature: float = 0.1, max_tokens: int = 2048):
         """
         初始化生成集成模块
@@ -49,7 +50,7 @@ class GenerationIntegrationModule:
         )
 
         logger.info("LLM初始化完成")
-    
+
     def generate_basic_answer(self, query: str, context_docs: List[Document]) -> str:
         """
         生成基础回答
@@ -77,15 +78,15 @@ class GenerationIntegrationModule:
 
         # 使用LCEL构建链
         chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
+                {"question": RunnablePassthrough(), "context": lambda _: context}
+                | prompt
+                | self.llm
+                | StrOutputParser()
         )
 
         response = chain.invoke(query)
         return response
-    
+
     def generate_step_by_step_answer(self, query: str, context_docs: List[Document]) -> str:
         """
         生成分步骤回答
@@ -130,10 +131,10 @@ class GenerationIntegrationModule:
 回答:""")
 
         chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
+                {"question": RunnablePassthrough(), "context": lambda _: context}
+                | prompt
+                | self.llm
+                | StrOutputParser()
         )
 
         response = chain.invoke(query)
@@ -159,22 +160,41 @@ class GenerationIntegrationModule:
 原始查询: {query}
 
 分析规则：
-1. 若查询缺少主语，根据历史对话补全（如历史在聊"红烧肉"，新问题是"怎么做"，重写为"红烧肉怎么做"）。
-2. 若查询明确，保持原意或补充烹饪术语。
-3. 若模糊不清，补充"简单家常菜推荐"等词。
+1. **具体明确的查询**（直接返回原查询）：
+   - 包含具体菜品名称：如"宫保鸡丁怎么做"、"红烧肉的制作方法"
+   - 明确的制作询问：如"蛋炒饭需要什么食材"、"糖醋排骨的步骤"
+   - 具体的烹饪技巧：如"如何炒菜不粘锅"、"怎样调制糖醋汁"
 
-请输出最终查询（如果不需要重写就返回原查询，不要输出任何解释理由）:""",
+2. **模糊不清的查询**（需要重写）：
+   - 过于宽泛：如"做菜"、"有什么好吃的"、"推荐个菜"
+   - 缺乏具体信息：如"川菜"、"素菜"、"简单的"
+   - 口语化表达：如"想吃点什么"、"有饮品推荐吗"
+
+重写原则：
+- 保持原意不变
+- 增加相关烹饪术语
+- 优先推荐简单易做的
+- 保持简洁性
+
+示例：
+- "做菜" → "简单易做的家常菜谱"
+- "有饮品推荐吗" → "简单饮品制作方法"
+- "推荐个菜" → "简单家常菜推荐"
+- "川菜" → "经典川菜菜谱"
+- "宫保鸡丁怎么做" → "宫保鸡丁怎么做"（保持原查询）
+- "红烧肉需要什么食材" → "红烧肉需要什么食材"（保持原查询）
+
+请输出最终查询（如果不需要重写就返回原查询）:""",
             input_variables=["query", "history_text"]
         )
 
-        chain = {"query": RunnablePassthrough(), "history_text": lambda _: history_text} | prompt | self.llm | StrOutputParser()
+        chain = {"query": RunnablePassthrough(),
+                 "history_text": lambda _: history_text} | prompt | self.llm | StrOutputParser()
         response = chain.invoke(query).strip()
 
         if response != query:
             logger.info(f"🧠 上下文重写: '{query}' → '{response}'")
         return response
-
-
 
     def query_router(self, query: str) -> str:
         """
@@ -205,10 +225,10 @@ class GenerationIntegrationModule:
 分类结果:""")
 
         chain = (
-            {"query": RunnablePassthrough()}
-            | prompt
-            | self.llm
-            | StrOutputParser()
+                {"query": RunnablePassthrough()}
+                | prompt
+                | self.llm
+                | StrOutputParser()
         )
 
         result = chain.invoke(query).strip().lower()
@@ -244,16 +264,38 @@ class GenerationIntegrationModule:
         if len(dish_names) == 1:
             return f"为您推荐：{dish_names[0]}"
         elif len(dish_names) <= 3:
-            return f"为您推荐以下菜品：\n" + "\n".join([f"{i+1}. {name}" for i, name in enumerate(dish_names)])
+            return f"为您推荐以下菜品：\n" + "\n".join([f"{i + 1}. {name}" for i, name in enumerate(dish_names)])
         else:
-            return f"为您推荐以下菜品：\n" + "\n".join([f"{i+1}. {name}" for i, name in enumerate(dish_names[:3])]) + f"\n\n还有其他 {len(dish_names)-3} 道菜品可供选择。"
+            return f"为您推荐以下菜品：\n" + "\n".join([f"{i + 1}. {name}" for i, name in
+                                               enumerate(dish_names[:3])]) + f"\n\n还有其他 {len(dish_names) - 3} 道菜品可供选择。"
 
     def generate_basic_answer_stream(self, query: str, context_docs: List[Document], chat_history: List = None):
+        """
+        生成基础回答 - 流式输出
+
+        Args:
+            query: 用户查询
+            context_docs: 上下文文档列表
+            chat_history: 历史对话记录
+
+        Yields:
+            生成的回答片段
+        """
         context = self._build_context(context_docs)
         chat_history = chat_history or []
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。\n\n相关食谱信息:\n{context}\n\n请提供详细、实用的回答。如果信息不足，请诚实说明。"),
+            ("system", """
+            你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
+
+用户问题: {question}
+
+相关食谱信息:
+{context}
+
+请提供详细、实用的回答。如果信息不足，请诚实说明。
+
+回答:"""),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{question}")
         ])
@@ -263,11 +305,48 @@ class GenerationIntegrationModule:
             yield chunk
 
     def generate_step_by_step_answer_stream(self, query: str, context_docs: List[Document], chat_history: List = None):
+        """
+        生成详细步骤回答 - 流式输出
+
+        Args:
+            query: 用户查询
+            context_docs: 上下文文档列表
+            chat_history: 历史对话记录
+
+        Yields:
+            详细步骤回答片段
+        """
         context = self._build_context(context_docs)
         chat_history = chat_history or []
 
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。\n\n相关食谱信息:\n{context}\n\n请灵活组织回答，建议包含：🥘菜品介绍、🛒所需食材、👨‍🍳制作步骤。"),
+            ("system", """你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
+
+用户问题: {question}
+
+相关食谱信息:
+{context}
+
+请灵活组织回答，建议包含以下部分（可根据实际内容调整）：
+
+## 🥘 菜品介绍
+[简要介绍菜品特点和难度]
+
+## 🛒 所需食材
+[列出主要食材和用量]
+
+## 👨‍🍳 制作步骤
+[详细的分步骤说明，每步包含具体操作和大概所需时间]
+
+## 💡 制作技巧
+[仅在有实用技巧时包含。如果原文的"附加内容"与烹饪无关或为空，可以基于制作步骤总结关键要点，或者完全省略此部分]
+
+注意：
+- 根据实际内容灵活调整结构
+- 不要强行填充无关内容
+- 重点突出实用性和可操作性
+
+回答:"""),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{question}")
         ])
@@ -289,10 +368,10 @@ class GenerationIntegrationModule:
         """
         if not docs:
             return "暂无相关食谱信息。"
-        
+
         context_parts = []
         current_length = 0
-        
+
         for i, doc in enumerate(docs, 1):
             # 添加元数据信息
             metadata_info = f"【食谱 {i}】"
@@ -302,15 +381,15 @@ class GenerationIntegrationModule:
                 metadata_info += f" | 分类: {doc.metadata['category']}"
             if 'difficulty' in doc.metadata:
                 metadata_info += f" | 难度: {doc.metadata['difficulty']}"
-            
+
             # 构建文档文本
             doc_text = f"{metadata_info}\n{doc.page_content}\n"
-            
+
             # 检查长度限制
             if current_length + len(doc_text) > max_length:
                 break
-            
+
             context_parts.append(doc_text)
             current_length += len(doc_text)
-        
-        return "\n" + "="*50 + "\n".join(context_parts)
+
+        return "\n" + "=" * 50 + "\n".join(context_parts)

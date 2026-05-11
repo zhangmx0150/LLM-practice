@@ -7,10 +7,6 @@ import sys
 import logging
 from pathlib import Path
 from typing import List
-
-# 添加模块路径
-sys.path.append(str(Path(__file__).parent))
-
 from dotenv import load_dotenv
 from config import DEFAULT_CONFIG, RAGConfig
 from rag_modules import (
@@ -20,6 +16,8 @@ from rag_modules import (
     GenerationIntegrationModule
 )
 
+# 添加模块路径
+sys.path.append(str(Path(__file__).parent))
 # 加载环境变量
 load_dotenv()
 
@@ -29,6 +27,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 class RecipeRAGSystem:
     """食谱RAG系统主类"""
@@ -96,20 +95,19 @@ class RecipeRAGSystem:
 
         elif vectorstore is not None and cache_loaded and updated_files:
             print(f"🔄 发现 {len(updated_files)} 个新增或修改的文件，正在进行增量更新...")
-            # 增量处理逻辑（这里为了简单和数据一致性，当有文件变更时，我们选择重新解析变更文件并追加）
-            # 注：FAISS 删除旧向量较复杂，业内轻量级做法是增量追加。如果修改频繁，建议定期删掉 index 文件夹全量重建。
-            self.data_module.load_documents() # 这里可以进一步优化为只 load updated_files
+            # 增量处理，当有文件变更时，重新解析变更文件并追加
+            self.data_module.load_documents()
             chunks = self.data_module.chunk_documents()
 
             print("追加向量索引...")
-            # 重新构建或追加（为了彻底避免重复，这里执行全量重建，配合缓存依然比以前快）
+            # 重新构建或追加
             vectorstore = self.index_module.build_vector_index(chunks)
             self.index_module.save_index()
             self.data_module.save_state_to_cache()
 
         else:
             print("⚠️ 未找到完整缓存或索引，开始全量构建新知识库...")
-            self.data_module.file_hashes = {} # 清空旧指纹
+            self.data_module.file_hashes = {}  # 清空旧指纹
 
             print("加载食谱文档...")
             self.data_module.load_documents()
@@ -144,6 +142,7 @@ class RecipeRAGSystem:
         Args:
             question: 用户问题
             stream: 是否使用流式输出
+            chat_history: 历史对话记录
 
         Returns:
             生成的回答或生成器
@@ -172,7 +171,8 @@ class RecipeRAGSystem:
         filters = self._extract_filters_from_query(question)
         if filters:
             print(f"应用过滤条件: {filters}")
-            relevant_chunks = self.retrieval_module.metadata_filtered_search(rewritten_query, filters, top_k=self.config.top_k)
+            relevant_chunks = self.retrieval_module.metadata_filtered_search(rewritten_query, filters,
+                                                                             top_k=self.config.top_k)
         else:
             relevant_chunks = self.retrieval_module.hybrid_search(rewritten_query, top_k=self.config.top_k)
 
@@ -235,7 +235,8 @@ class RecipeRAGSystem:
             if route_type == "detail":
                 if stream:
                     # 传入历史记录给生成器
-                    return self.generation_module.generate_step_by_step_answer_stream(question, relevant_docs, chat_history)
+                    return self.generation_module.generate_step_by_step_answer_stream(question, relevant_docs,
+                                                                                      chat_history)
                 else:
                     return self.generation_module.generate_step_by_step_answer(question, relevant_docs)
             else:
@@ -360,7 +361,6 @@ class RecipeRAGSystem:
         print("\n感谢使用尝尝咸淡RAG系统！")
 
 
-
 def main():
     """主函数"""
     try:
@@ -373,6 +373,7 @@ def main():
     except Exception as e:
         logger.error(f"系统运行出错: {e}")
         print(f"系统错误: {e}")
+
 
 if __name__ == "__main__":
     main()

@@ -11,9 +11,10 @@ from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
+
 class RetrievalOptimizationModule:
     """检索优化模块 - 负责混合检索和过滤"""
-    
+
     def __init__(self, vectorstore: FAISS, chunks: List[Document]):
         """
         初始化检索优化模块
@@ -42,13 +43,11 @@ class RetrievalOptimizationModule:
             k=5
         )
 
-
-
         logger.info("检索器设置完成")
-    
+
     def hybrid_search(self, query: str, top_k: int = 3) -> List[Document]:
         """
-        混合检索 - 结合向量检索和BM25检索，使用RRF重排
+        混合检索 - 结合向量检索和BM25检索，使用 RRF重排
 
         Args:
             query: 查询文本
@@ -64,7 +63,7 @@ class RetrievalOptimizationModule:
         # 使用RRF重排
         reranked_docs = self._rrf_rerank(vector_docs, bm25_docs)
         return reranked_docs[:top_k]
-    
+
     def metadata_filtered_search(self, query: str, filters: Dict[str, Any], top_k: int = 5) -> List[Document]:
         """
         带元数据过滤的检索
@@ -79,7 +78,7 @@ class RetrievalOptimizationModule:
         """
         # 先进行混合检索，获取更多候选
         docs = self.hybrid_search(query, top_k * 3)
-        
+
         # 应用元数据过滤
         filtered_docs = []
         for doc in docs:
@@ -97,12 +96,12 @@ class RetrievalOptimizationModule:
                 else:
                     match = False
                     break
-            
+
             if match:
                 filtered_docs.append(doc)
                 if len(filtered_docs) >= top_k:
                     break
-        
+
         return filtered_docs
 
     def _rrf_rerank(self, vector_docs: List[Document], bm25_docs: List[Document], k: int = 60) -> List[Document]:
@@ -130,7 +129,7 @@ class RetrievalOptimizationModule:
             rrf_score = 1.0 / (k + rank + 1)
             doc_scores[doc_id] = doc_scores.get(doc_id, 0) + rrf_score
 
-            logger.debug(f"向量检索 - 文档{rank+1}: RRF分数 = {rrf_score:.4f}")
+            logger.debug(f"向量检索 - 文档{rank + 1}: RRF分数 = {rrf_score:.4f}")
 
         # 计算BM25检索结果的RRF分数
         for rank, doc in enumerate(bm25_docs):
@@ -140,7 +139,7 @@ class RetrievalOptimizationModule:
             rrf_score = 1.0 / (k + rank + 1)
             doc_scores[doc_id] = doc_scores.get(doc_id, 0) + rrf_score
 
-            logger.debug(f"BM25检索 - 文档{rank+1}: RRF分数 = {rrf_score:.4f}")
+            logger.debug(f"BM25检索 - 文档{rank + 1}: RRF分数 = {rrf_score:.4f}")
 
         # 按最终RRF分数排序
         sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
@@ -158,5 +157,3 @@ class RetrievalOptimizationModule:
         logger.info(f"RRF重排完成: 向量检索{len(vector_docs)}个文档, BM25检索{len(bm25_docs)}个文档, 合并后{len(reranked_docs)}个文档")
 
         return reranked_docs
-
-
