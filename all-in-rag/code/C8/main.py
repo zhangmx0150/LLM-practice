@@ -137,7 +137,7 @@ class RecipeRAGSystem:
         print(f"   文本块数: {stats['total_chunks']}")
         print("✅ 知识库就绪！")
 
-    def ask_question(self, question: str, stream: bool = False):
+    def ask_question(self, question: str, stream: bool = False, chat_history: List = None):
         """
         回答用户问题
 
@@ -157,15 +157,15 @@ class RecipeRAGSystem:
         route_type = self.generation_module.query_router(question)
         print(f"🎯 查询类型: {route_type}")
 
+        chat_history = chat_history or []  # 默认空列表
+
         # 2. 智能查询重写（根据路由类型）
         if route_type == 'list':
-            # 列表查询保持原查询
             rewritten_query = question
-            print(f"📝 列表查询保持原样: {question}")
         else:
-            # 详细查询和一般查询使用智能重写
-            print("🤖 智能分析查询...")
-            rewritten_query = self.generation_module.query_rewrite(question)
+            print("🤖 结合上下文智能分析查询...")
+            # 传入历史记录给重写器
+            rewritten_query = self.generation_module.query_rewrite(question, chat_history)
 
         # 3. 检索相关子块（自动应用元数据过滤）
         print("🔍 检索相关文档...")
@@ -232,18 +232,16 @@ class RecipeRAGSystem:
                 print(f"对应 {len(relevant_docs)} 个完整文档")
 
             print("✍️ 生成详细回答...")
-
-            # 根据路由类型自动选择回答模式
             if route_type == "detail":
-                # 详细查询使用分步指导模式
                 if stream:
-                    return self.generation_module.generate_step_by_step_answer_stream(question, relevant_docs)
+                    # 传入历史记录给生成器
+                    return self.generation_module.generate_step_by_step_answer_stream(question, relevant_docs, chat_history)
                 else:
                     return self.generation_module.generate_step_by_step_answer(question, relevant_docs)
             else:
-                # 一般查询使用基础回答模式
                 if stream:
-                    return self.generation_module.generate_basic_answer_stream(question, relevant_docs)
+                    # 传入历史记录给生成器
+                    return self.generation_module.generate_basic_answer_stream(question, relevant_docs, chat_history)
                 else:
                     return self.generation_module.generate_basic_answer(question, relevant_docs)
 

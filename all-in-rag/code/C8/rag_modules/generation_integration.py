@@ -5,7 +5,7 @@
 import os
 import logging
 from typing import List
-
+from langchain_core.prompts import MessagesPlaceholder
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.documents import Document
@@ -138,67 +138,40 @@ class GenerationIntegrationModule:
 
         response = chain.invoke(query)
         return response
-    
-    def query_rewrite(self, query: str) -> str:
-        """
-        智能查询重写 - 让大模型判断是否需要重写查询
 
-        Args:
-            query: 原始查询
+    def query_rewrite(self, query: str, chat_history: List = None) -> str:
+        """智能查询重写 - 结合历史记录补全主语"""
+        # 将历史记录格式化为纯文本供分析
+        history_text = "无历史对话"
+        if chat_history:
+            # 只取最近的 3 轮对话（6条消息）防止上下文过长
+            recent_history = chat_history[-6:]
+            history_text = "\n".join([f"{'用户' if msg[0] == 'human' else '助手'}: {msg[1]}" for msg in recent_history])
 
-        Returns:
-            重写后的查询或原查询
-        """
         prompt = PromptTemplate(
             template="""
-你是一个智能查询分析助手。请分析用户的查询，判断是否需要重写以提高食谱搜索效果。
+你是一个智能查询分析助手。请分析用户的查询，判断是否需要重写。
+【核心任务】：如果用户的问题中包含代词（它、这个）或者省略了主语（如"具体怎么做"），请务必参考【历史对话记录】补全真正的菜品名称！
+
+历史对话记录：
+{history_text}
 
 原始查询: {query}
 
 分析规则：
-1. **具体明确的查询**（直接返回原查询）：
-   - 包含具体菜品名称：如"宫保鸡丁怎么做"、"红烧肉的制作方法"
-   - 明确的制作询问：如"蛋炒饭需要什么食材"、"糖醋排骨的步骤"
-   - 具体的烹饪技巧：如"如何炒菜不粘锅"、"怎样调制糖醋汁"
+1. 若查询缺少主语，根据历史对话补全（如历史在聊"红烧肉"，新问题是"怎么做"，重写为"红烧肉怎么做"）。
+2. 若查询明确，保持原意或补充烹饪术语。
+3. 若模糊不清，补充"简单家常菜推荐"等词。
 
-2. **模糊不清的查询**（需要重写）：
-   - 过于宽泛：如"做菜"、"有什么好吃的"、"推荐个菜"
-   - 缺乏具体信息：如"川菜"、"素菜"、"简单的"
-   - 口语化表达：如"想吃点什么"、"有饮品推荐吗"
-
-重写原则：
-- 保持原意不变
-- 增加相关烹饪术语
-- 优先推荐简单易做的
-- 保持简洁性
-
-示例：
-- "做菜" → "简单易做的家常菜谱"
-- "有饮品推荐吗" → "简单饮品制作方法"
-- "推荐个菜" → "简单家常菜推荐"
-- "川菜" → "经典川菜菜谱"
-- "宫保鸡丁怎么做" → "宫保鸡丁怎么做"（保持原查询）
-- "红烧肉需要什么食材" → "红烧肉需要什么食材"（保持原查询）
-
-请输出最终查询（如果不需要重写就返回原查询）:""",
-            input_variables=["query"]
+请输出最终查询（如果不需要重写就返回原查询，不要输出任何解释理由）:""",
+            input_variables=["query", "history_text"]
         )
 
-        chain = (
-            {"query": RunnablePassthrough()}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
+        chain = {"query": RunnablePassthrough(), "history_text": lambda _: history_text} | prompt | self.llm | StrOutputParser()
         response = chain.invoke(query).strip()
 
-        # 记录重写结果
         if response != query:
-            logger.info(f"查询已重写: '{query}' → '{response}'")
-        else:
-            logger.info(f"查询无需重写: '{query}'")
-
+            logger.info(f"🧠 上下文重写: '{query}' → '{response}'")
         return response
 
 
@@ -275,91 +248,32 @@ class GenerationIntegrationModule:
         else:
             return f"为您推荐以下菜品：\n" + "\n".join([f"{i+1}. {name}" for i, name in enumerate(dish_names[:3])]) + f"\n\n还有其他 {len(dish_names)-3} 道菜品可供选择。"
 
-    def generate_basic_answer_stream(self, query: str, context_docs: List[Document]):
-        """
-        生成基础回答 - 流式输出
-
-        Args:
-            query: 用户查询
-            context_docs: 上下文文档列表
-
-        Yields:
-            生成的回答片段
-        """
+    def generate_basic_answer_stream(self, query: str, context_docs: List[Document], chat_history: List = None):
         context = self._build_context(context_docs)
+        chat_history = chat_history or []
 
-        prompt = ChatPromptTemplate.from_template("""
-你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。\n\n相关食谱信息:\n{context}\n\n请提供详细、实用的回答。如果信息不足，请诚实说明。"),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{question}")
+        ])
 
-用户问题: {question}
-
-相关食谱信息:
-{context}
-
-请提供详细、实用的回答。如果信息不足，请诚实说明。
-
-回答:""")
-
-        chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
-        for chunk in chain.stream(query):
+        chain = prompt | self.llm | StrOutputParser()
+        for chunk in chain.stream({"question": query, "context": context, "chat_history": chat_history}):
             yield chunk
 
-    def generate_step_by_step_answer_stream(self, query: str, context_docs: List[Document]):
-        """
-        生成详细步骤回答 - 流式输出
-
-        Args:
-            query: 用户查询
-            context_docs: 上下文文档列表
-
-        Yields:
-            详细步骤回答片段
-        """
+    def generate_step_by_step_answer_stream(self, query: str, context_docs: List[Document], chat_history: List = None):
         context = self._build_context(context_docs)
+        chat_history = chat_history or []
 
-        prompt = ChatPromptTemplate.from_template("""
-你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。\n\n相关食谱信息:\n{context}\n\n请灵活组织回答，建议包含：🥘菜品介绍、🛒所需食材、👨‍🍳制作步骤。"),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{question}")
+        ])
 
-用户问题: {question}
-
-相关食谱信息:
-{context}
-
-请灵活组织回答，建议包含以下部分（可根据实际内容调整）：
-
-## 🥘 菜品介绍
-[简要介绍菜品特点和难度]
-
-## 🛒 所需食材
-[列出主要食材和用量]
-
-## 👨‍🍳 制作步骤
-[详细的分步骤说明，每步包含具体操作和大概所需时间]
-
-## 💡 制作技巧
-[仅在有实用技巧时包含。如果原文的"附加内容"与烹饪无关或为空，可以基于制作步骤总结关键要点，或者完全省略此部分]
-
-注意：
-- 根据实际内容灵活调整结构
-- 不要强行填充无关内容
-- 重点突出实用性和可操作性
-
-回答:""")
-
-        chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
-        for chunk in chain.stream(query):
+        chain = prompt | self.llm | StrOutputParser()
+        for chunk in chain.stream({"question": query, "context": context, "chat_history": chat_history}):
             yield chunk
 
     def _build_context(self, docs: List[Document], max_length: int = 2000) -> str:
