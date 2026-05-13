@@ -37,10 +37,22 @@ class GraphRAGConfig:
     chunk_overlap: int = 50
     max_graph_depth: int = 2  # 图遍历最大深度
 
+    # 性能优化配置
+    cache_enabled: bool = True  # 是否启用查询、检索、生成等运行期缓存
+    cache_ttl_seconds: int = 3600  # 通用缓存过期时间
+    cache_max_size: int = 256  # 通用缓存最大条目数
+    answer_cache_ttl_seconds: int = 1800  # 答案缓存过期时间，避免过旧回答长期复用
+    answer_cache_max_size: int = 128  # 答案缓存最大条目数
+    enable_parallel_retrieval: bool = True  # 是否并行执行独立检索分支
+    embedding_device: str = "auto"  # auto/cpu/cuda；auto 会优先使用可用 GPU
+
     def __post_init__(self):
-        """初始化后的处理"""
-        # LightRAG使用Round-robin策略，无需权重验证
-        pass
+        """初始化后规范化配置值，避免非法参数影响缓存和检索。"""
+        self.cache_ttl_seconds = max(1, int(self.cache_ttl_seconds))
+        self.cache_max_size = max(1, int(self.cache_max_size))
+        self.answer_cache_ttl_seconds = max(1, int(self.answer_cache_ttl_seconds))
+        self.answer_cache_max_size = max(1, int(self.answer_cache_max_size))
+        self.embedding_device = (self.embedding_device or "auto").lower()
     
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'GraphRAGConfig':
@@ -66,8 +78,15 @@ class GraphRAGConfig:
             'max_tokens': self.max_tokens,
             'chunk_size': self.chunk_size,
             'chunk_overlap': self.chunk_overlap,
-            'max_graph_depth': self.max_graph_depth
+            'max_graph_depth': self.max_graph_depth,
+            'cache_enabled': self.cache_enabled,
+            'cache_ttl_seconds': self.cache_ttl_seconds,
+            'cache_max_size': self.cache_max_size,
+            'answer_cache_ttl_seconds': self.answer_cache_ttl_seconds,
+            'answer_cache_max_size': self.answer_cache_max_size,
+            'enable_parallel_retrieval': self.enable_parallel_retrieval,
+            'embedding_device': self.embedding_device
         }
 
 # 默认配置实例
-DEFAULT_CONFIG = GraphRAGConfig() 
+DEFAULT_CONFIG = GraphRAGConfig()

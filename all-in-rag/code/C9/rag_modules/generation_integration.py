@@ -9,19 +9,33 @@ from typing import List
 
 from openai import OpenAI
 from langchain_core.documents import Document
+from .cache_utils import TTLCache, document_fingerprint, make_cache_key
 
 logger = logging.getLogger(__name__)
 
 class GenerationIntegrationModule:
     """生成集成模块 - 负责答案生成"""
 
-    def __init__(self, model_name: str = "qwen3.6-plus", temperature: float = 0.1, max_tokens: int = 2048):
+    def __init__(
+        self,
+        model_name: str = "qwen3.6-plus",
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        cache_enabled: bool = True,
+        answer_cache_max_size: int = 128,
+        answer_cache_ttl_seconds: int = 1800,
+    ):
         """
-        初始化生成集成模块
+        初始化生成集成模块，创建 DashScope/OpenAI 兼容客户端和答案缓存。
         """
         self.model_name = model_name
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.answer_cache = TTLCache(
+            max_size=answer_cache_max_size,
+            ttl_seconds=answer_cache_ttl_seconds,
+            enabled=cache_enabled,
+        )
         
         # 初始化OpenAI客户端
         api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -35,28 +49,27 @@ class GenerationIntegrationModule:
 
         logger.info(f"生成模块初始化完成，模型: {model_name}")
 
-    def generate_adaptive_answer(self, question: str, documents: List[Document]) -> str:
-        """
-        智能统一答案生成
-        自动适应不同类型的查询，无需预先分类
-        """
-        # 构建上下文
+    def _build_context(self, documents: List[Document]) -> str:
+        """把检索到的文档整理成提示词上下文，保留原有层级标记逻辑。"""
         context_parts = []
-        
+
         for doc in documents:
             content = doc.page_content.strip()
-            if content:
-                # 添加检索层级信息（如果有的话）
-                level = doc.metadata.get('retrieval_level', '')
-                if level:
-                    context_parts.append(f"[{level.upper()}] {content}")
-                else:
-                    context_parts.append(content)
-        
-        context = "\n\n".join(context_parts)
-        
-        # LightRAG风格的统一提示词
-        prompt = f"""
+            if not content:
+                continue
+
+            level = doc.metadata.get("retrieval_level", "")
+            if level:
+                context_parts.append(f"[{level.upper()}] {content}")
+            else:
+                context_parts.append(content)
+
+        return "\n\n".join(context_parts)
+
+    def _build_prompt(self, question: str, documents: List[Document]) -> str:
+        """根据问题和检索文档构建与原逻辑一致的烹饪问答提示词。"""
+        context = self._build_context(documents)
+        return f"""
         作为一位专业的烹饪助手，请基于以下信息回答用户的问题。
 
         检索到的相关信息：
@@ -71,6 +84,34 @@ class GenerationIntegrationModule:
 
         回答：
         """
+
+    def _answer_cache_key(self, question: str, documents: List[Document]) -> str:
+        """根据问题、文档指纹和生成参数生成答案缓存键。"""
+        document_keys = [document_fingerprint(doc) for doc in documents]
+        return make_cache_key(
+            "adaptive_answer",
+            self.model_name,
+            self.temperature,
+            self.max_tokens,
+            question,
+            document_keys,
+        )
+
+    def clear_cache(self) -> None:
+        """清空答案缓存，适用于知识库重建或希望强制重新生成的场景。"""
+        self.answer_cache.clear()
+
+    def generate_adaptive_answer(self, question: str, documents: List[Document]) -> str:
+        """
+        智能统一答案生成；命中缓存时直接返回，未命中时保持原有 LLM 生成流程。
+        """
+        cache_key = self._answer_cache_key(question, documents)
+        cached_answer = self.answer_cache.get(cache_key)
+        if cached_answer:
+            logger.info("答案生成命中缓存")
+            return cached_answer
+
+        prompt = self._build_prompt(question, documents)
         
         try:
             response = self.client.chat.completions.create(
@@ -81,8 +122,10 @@ class GenerationIntegrationModule:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens
             )
-            
-            return response.choices[0].message.content.strip()
+
+            answer = response.choices[0].message.content.strip()
+            self.answer_cache.set(cache_key, answer)
+            return answer
             
         except Exception as e:
             logger.error(f"LightRAG答案生成失败: {e}")
@@ -90,40 +133,20 @@ class GenerationIntegrationModule:
 
     def generate_adaptive_answer_stream(self, question: str, documents: List[Document], max_retries: int = 3):
         """
-        LightRAG风格的流式答案生成（带重试机制）
+        LightRAG风格的流式答案生成；完整生成成功后写入缓存，重复问题可直接流式吐出缓存文本。
         """
-        # 构建上下文
-        context_parts = []
+        cache_key = self._answer_cache_key(question, documents)
+        cached_answer = self.answer_cache.get(cache_key)
+        if cached_answer:
+            logger.info("流式答案命中缓存")
+            yield cached_answer
+            return
 
-        for doc in documents:
-            content = doc.page_content.strip()
-            if content:
-                level = doc.metadata.get('retrieval_level', '')
-                if level:
-                    context_parts.append(f"[{level.upper()}] {content}")
-                else:
-                    context_parts.append(content)
-
-        context = "\n\n".join(context_parts)
-
-        prompt = f"""
-        作为一位专业的烹饪助手，请基于以下信息回答用户的问题。
-
-        检索到的相关信息：
-        {context}
-
-        用户问题：{question}
-
-        请提供准确、实用的回答。根据问题的性质：
-        - 如果是询问多个菜品，请提供清晰的列表
-        - 如果是询问具体制作方法，请提供详细步骤
-        - 如果是一般性咨询，请提供综合性回答
-
-        回答：
-        """
+        prompt = self._build_prompt(question, documents)
 
         for attempt in range(max_retries):
-            chunk_yielded = False # 记录是否已经成功输出过字符
+            chunk_yielded = False  # 记录是否已经成功输出过字符
+            answer_parts = []
             try:
                 response = self.client.chat.completions.create(
                     model=self.model_name,
@@ -142,10 +165,13 @@ class GenerationIntegrationModule:
                     delta = chunk.choices[0].delta
                     if getattr(delta, 'content', None):
                         content = delta.content
+                        answer_parts.append(content)
                         yield content
                         chunk_yielded = True
 
-                # 如果顺利走完循环，说明生成完美结束，退出函数
+                # 如果顺利走完循环，说明生成完整结束，此时缓存完整答案。
+                if answer_parts:
+                    self.answer_cache.set(cache_key, "".join(answer_parts).strip())
                 return
 
             except Exception as e:

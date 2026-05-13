@@ -81,19 +81,6 @@ async def on_message(message: cl.Message):
                 # 🌟 核心修复 2：在同步的 for 循环中，强制让出极短的 CPU 时间给心跳程序
                 await asyncio.sleep(0)
 
-        # 3. 附加路由分析结果
-        # if analysis:
-        #     strategy_icons = {
-        #         "hybrid_traditional": "🔍 传统混合检索",
-        #         "graph_rag": "🕸️ 图谱推理检索",
-        #         "combined": "🔄 双引擎综合检索"
-        #     }
-        #     strategy_name = strategy_icons.get(analysis.recommended_strategy.value, analysis.recommended_strategy.value)
-        #
-        #     analysis_text = f"\n\n---\n*⚙️ **底层引擎诊断**: 识别到查询复杂度为 `{analysis.query_complexity:.1f}`，系统自动路由至 **[{strategy_name}]** 分支为您解答。*"
-        #     full_response += analysis_text
-        #     await response_msg.stream_token(analysis_text)
-
         await response_msg.update()
 
         # 记录历史

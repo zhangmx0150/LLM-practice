@@ -6,6 +6,8 @@
 
 import json
 import logging
+import heapq
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Tuple, Any, Optional
 from dataclasses import dataclass
 
@@ -14,6 +16,7 @@ from rank_bm25 import BM25Okapi
 from langchain_core.documents import Document
 from neo4j import GraphDatabase
 from .graph_indexing import GraphIndexingModule
+from .cache_utils import TTLCache, clone_documents, make_cache_key, strip_json_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class HybridRetrievalModule:
     """
 
     def __init__(self, config, milvus_module, data_module, llm_client):
+        """初始化混合检索器，接入Milvus、Neo4j数据模块、LLM和多级缓存。"""
         self.config = config
         self.milvus_module = milvus_module
         self.data_module = data_module
@@ -64,15 +68,31 @@ class HybridRetrievalModule:
         self.graph_indexing = GraphIndexingModule(config, llm_client)
         self.graph_indexed = False
 
+        # 运行期缓存：避免重复LLM关键词抽取、Neo4j邻居查询和完整混合检索。
+        cache_enabled = getattr(config, "cache_enabled", True)
+        cache_max_size = getattr(config, "cache_max_size", 256)
+        cache_ttl_seconds = getattr(config, "cache_ttl_seconds", 3600)
+        self.keyword_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.neighbor_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.dual_search_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.vector_search_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.bm25_search_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.hybrid_search_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+
     def initialize(self, chunks: List[Document]):
-        """初始化检索系统"""
+        """初始化检索系统，并重建依赖当前知识库的本地图索引。"""
         logger.info("初始化混合检索模块...")
 
         # 连接Neo4j
+        if self.driver:
+            self.driver.close()
         self.driver = GraphDatabase.driver(
             self.config.neo4j_uri,
             auth=(self.config.neo4j_user, self.config.neo4j_password)
         )
+        self.graph_indexing = GraphIndexingModule(self.config, self.llm_client)
+        self.graph_indexed = False
+        self.clear_cache()
 
         # 初始化 BM25（jieba 分词 + 中文停用词过滤）
         if chunks:
@@ -87,6 +107,22 @@ class HybridRetrievalModule:
 
         # 初始化图索引
         self._build_graph_index()
+
+    def _session(self):
+        """创建Neo4j会话，统一使用配置中的数据库名称。"""
+        database = getattr(self.config, "neo4j_database", None)
+        if database:
+            return self.driver.session(database=database)
+        return self.driver.session()
+
+    def clear_cache(self) -> None:
+        """清空混合检索的运行期缓存，适用于知识库重建后。"""
+        self.keyword_cache.clear()
+        self.neighbor_cache.clear()
+        self.dual_search_cache.clear()
+        self.vector_search_cache.clear()
+        self.bm25_search_cache.clear()
+        self.hybrid_search_cache.clear()
 
     @staticmethod
     def _tokenize_chinese(text: str) -> List[str]:
@@ -134,7 +170,7 @@ class HybridRetrievalModule:
         relationships = []
         
         try:
-            with self.driver.session() as session:
+            with self._session() as session:
                 query = """
                 MATCH (source)-[r]->(target)
                 WHERE source.nodeId >= '200000000' OR target.nodeId >= '200000000'
@@ -157,8 +193,14 @@ class HybridRetrievalModule:
             
     def extract_query_keywords(self, query: str) -> Tuple[List[str], List[str]]:
         """
-        提取查询关键词：实体级 + 主题级
+        提取查询关键词：实体级 + 主题级；重复查询直接复用LLM抽取结果。
         """
+        cache_key = make_cache_key("extract_query_keywords", query)
+        cached_keywords = self.keyword_cache.get(cache_key)
+        if cached_keywords is not None:
+            logger.info("关键词抽取命中缓存")
+            return cached_keywords
+
         prompt = f"""
         作为烹饪知识助手，请分析以下查询并提取关键词，分为两个层次：
 
@@ -201,30 +243,27 @@ class HybridRetrievalModule:
                 max_tokens=500
             )
 
-            # 🌟 新增：清洗大模型返回的 Markdown 标记
-            raw_content = response.choices[0].message.content.strip()
-            if raw_content.startswith("```json"):
-                raw_content = raw_content[7:]
-            elif raw_content.startswith("```"):
-                raw_content = raw_content[3:]
-            if raw_content.endswith("```"):
-                raw_content = raw_content[:-3]
-            raw_content = raw_content.strip()
+            # 清洗大模型返回的 Markdown 标记
+            raw_content = strip_json_markdown(response.choices[0].message.content)
 
             # 使用清洗后的字符串进行 JSON 解析
             result = json.loads(raw_content)
 
             entity_keywords = result.get("entity_keywords", [])
             topic_keywords = result.get("topic_keywords", [])
+            keywords = (entity_keywords, topic_keywords)
 
             logger.info(f"关键词提取完成 - 实体级: {entity_keywords}, 主题级: {topic_keywords}")
-            return entity_keywords, topic_keywords
+            self.keyword_cache.set(cache_key, keywords)
+            return keywords
 
         except Exception as e:
             logger.error(f"关键词提取失败: {e}")
             # 降级方案：简单的关键词分割
             keywords = query.split()
-            return keywords[:3], keywords[3:6] if len(keywords) > 3 else keywords
+            fallback_keywords = (keywords[:3], keywords[3:6] if len(keywords) > 3 else keywords)
+            self.keyword_cache.set(cache_key, fallback_keywords)
+            return fallback_keywords
     
     def entity_level_retrieval(self, entity_keywords: List[str], top_k: int = 5) -> List[RetrievalResult]:
         """
@@ -277,7 +316,7 @@ class HybridRetrievalModule:
         results = []
         
         try:
-            with self.driver.session() as session:
+            with self._session() as session:
                 cypher_query = """
                 UNWIND $keywords as keyword
                 CALL db.index.fulltext.queryNodes('recipe_fulltext_index', keyword + '*') 
@@ -411,7 +450,7 @@ class HybridRetrievalModule:
         results = []
         
         try:
-            with self.driver.session() as session:
+            with self._session() as session:
                 cypher_query = """
                 UNWIND $keywords as keyword
                 MATCH (r:Recipe)
@@ -476,9 +515,14 @@ class HybridRetrievalModule:
         
     def dual_level_retrieval(self, query: str, top_k: int = 5) -> List[Document]:
         """
-        双层检索：结合实体级和主题级检索
+        双层检索：结合实体级和主题级检索；缓存完整结果以减少重复LLM和Neo4j调用。
         """
         logger.info(f"开始双层检索: {query}")
+        cache_key = make_cache_key("dual_level_retrieval", query, top_k)
+        cached_docs = self.dual_search_cache.get(cache_key)
+        if cached_docs is not None:
+            logger.info("双层检索命中缓存")
+            return clone_documents(cached_docs)
         
         # 1. 提取关键词
         entity_keywords, topic_keywords = self.extract_query_keywords(query)
@@ -520,12 +564,19 @@ class HybridRetrievalModule:
             documents.append(doc)
             
         logger.info(f"双层检索完成，返回 {len(documents)} 个文档")
-        return documents
+        self.dual_search_cache.set(cache_key, documents)
+        return clone_documents(documents)
     
     def vector_search_enhanced(self, query: str, top_k: int = 5) -> List[Document]:
         """
-        增强的向量检索：结合图信息
+        增强的向量检索：结合图信息；缓存Milvus结果和Neo4j邻居增强后的Document。
         """
+        cache_key = make_cache_key("vector_search_enhanced", query, top_k)
+        cached_docs = self.vector_search_cache.get(cache_key)
+        if cached_docs is not None:
+            logger.info("增强向量检索命中缓存")
+            return clone_documents(cached_docs)
+
         try:
             # 使用Milvus进行向量检索
             vector_docs = self.milvus_module.similarity_search(query, k=top_k*2)
@@ -565,32 +616,46 @@ class HybridRetrievalModule:
                 )
                 enhanced_docs.append(doc)
                 
-            return enhanced_docs[:top_k]
+            final_docs = enhanced_docs[:top_k]
+            self.vector_search_cache.set(cache_key, final_docs)
+            return clone_documents(final_docs)
             
         except Exception as e:
             logger.error(f"增强向量检索失败: {e}")
             return []
     
     def _get_node_neighbors(self, node_id: str, max_neighbors: int = 3) -> List[str]:
-        """获取节点的邻居信息"""
+        """获取节点的邻居信息；缓存一跳邻居，避免逐条重复访问Neo4j。"""
+        cache_key = make_cache_key("node_neighbors", node_id, max_neighbors)
+        cached_neighbors = self.neighbor_cache.get(cache_key)
+        if cached_neighbors is not None:
+            return cached_neighbors
+
         try:
-            with self.driver.session() as session:
+            with self._session() as session:
                 query = """
                 MATCH (n {nodeId: $node_id})-[r]-(neighbor)
                 RETURN neighbor.name as name
                 LIMIT $limit
                 """
                 result = session.run(query, {"node_id": node_id, "limit": max_neighbors})
-                return [record["name"] for record in result if record["name"]]
+                neighbors = [record["name"] for record in result if record["name"]]
+                self.neighbor_cache.set(cache_key, neighbors)
+                return neighbors
         except Exception as e:
             logger.error(f"获取邻居节点失败: {e}")
             return []
     
     def bm25_search(self, query: str, top_k: int = 5) -> List[Document]:
         """
-        BM25 检索：jieba 分词后查 BM25Okapi 索引，按分数降序返回 top_k。
-        分数写入 metadata["bm25_score"]，供调试与未来潜在的分数级融合使用。
+        BM25 检索：jieba 分词后查 BM25Okapi 索引，按分数降序返回 top_k，并缓存结果。
         """
+        cache_key = make_cache_key("bm25_search", query, top_k)
+        cached_docs = self.bm25_search_cache.get(cache_key)
+        if cached_docs is not None:
+            logger.info("BM25检索命中缓存")
+            return clone_documents(cached_docs)
+
         if self.bm25 is None or not self.bm25_corpus_docs:
             logger.warning("BM25 索引未初始化，bm25_search 返回空")
             return []
@@ -601,10 +666,8 @@ class HybridRetrievalModule:
             return []
 
         scores = self.bm25.get_scores(tokenized_query)
-        # 按分数降序取 top_k 索引
-        top_indices = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True
-        )[:top_k]
+        # 使用 heapq.nlargest 避免对全部分数做完整排序。
+        top_indices = heapq.nlargest(top_k, range(len(scores)), key=lambda i: scores[i])
 
         docs: List[Document] = []
         for idx in top_indices:
@@ -631,7 +694,8 @@ class HybridRetrievalModule:
             docs.append(doc)
 
         logger.info(f"BM25 检索完成，返回 {len(docs)} 个文档（query tokens={tokenized_query}）")
-        return docs
+        self.bm25_search_cache.set(cache_key, docs)
+        return clone_documents(docs)
 
     @staticmethod
     def _rrf_merge(
@@ -720,18 +784,52 @@ class HybridRetrievalModule:
 
         return merged
 
+    def _run_retrieval_branches(self, query: str, candidate_k: int) -> Tuple[List[Document], List[Document], List[Document]]:
+        """执行三路独立检索；配置允许时并行运行以减少总等待时间。"""
+        if not getattr(self.config, "enable_parallel_retrieval", True):
+            return (
+                self.dual_level_retrieval(query, candidate_k),
+                self.vector_search_enhanced(query, candidate_k),
+                self.bm25_search(query, candidate_k),
+            )
+
+        branch_calls = {
+            "dual": lambda: self.dual_level_retrieval(query, candidate_k),
+            "vector": lambda: self.vector_search_enhanced(query, candidate_k),
+            "bm25": lambda: self.bm25_search(query, candidate_k),
+        }
+        branch_results: Dict[str, List[Document]] = {
+            "dual": [],
+            "vector": [],
+            "bm25": [],
+        }
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(func): name for name, func in branch_calls.items()}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    branch_results[name] = future.result()
+                except Exception as e:
+                    logger.error(f"{name} 检索分支失败: {e}")
+
+        return branch_results["dual"], branch_results["vector"], branch_results["bm25"]
+
     def hybrid_search(self, query: str, top_k: int = 5) -> List[Document]:
         """
-        混合检索：三路召回（图键值双层 + 向量 + BM25）→ RRF 融合
+        混合检索：三路召回（图键值双层 + 向量 + BM25）→ RRF 融合，并缓存最终结果。
         """
         logger.info(f"开始混合检索（dual + vector + bm25, RRF k={_RRF_K}）: {query}")
+        cache_key = make_cache_key("hybrid_search", query, top_k)
+        cached_docs = self.hybrid_search_cache.get(cache_key)
+        if cached_docs is not None:
+            logger.info("混合检索命中缓存")
+            return clone_documents(cached_docs)
 
         # 每路给 RRF 留够候选空间，否则三路各自前 top_k 容易没交集，融合退化
         candidate_k = max(top_k * 2, 10)
 
-        dual_docs = self.dual_level_retrieval(query, candidate_k)
-        vector_docs = self.vector_search_enhanced(query, candidate_k)
-        bm25_docs = self.bm25_search(query, candidate_k)
+        dual_docs, vector_docs, bm25_docs = self._run_retrieval_branches(query, candidate_k)
 
         # 标记每路来源（dual_level 内部会写 search_type 但不一定写 search_method）
         for d in dual_docs:
@@ -753,10 +851,11 @@ class HybridRetrievalModule:
             f"RRF 融合完成：dual={len(dual_docs)} vector={len(vector_docs)} "
             f"bm25={len(bm25_docs)} → 最终 {len(final_docs)} 个文档"
         )
-        return final_docs
+        self.hybrid_search_cache.set(cache_key, final_docs)
+        return clone_documents(final_docs)
 
     def close(self):
         """关闭资源连接"""
         if self.driver:
             self.driver.close()
-            logger.info("Neo4j连接已关闭") 
+            logger.info("Neo4j连接已关闭")

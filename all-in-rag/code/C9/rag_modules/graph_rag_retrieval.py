@@ -12,6 +12,7 @@ from enum import Enum
 
 from langchain_core.documents import Document
 from neo4j import GraphDatabase
+from .cache_utils import TTLCache, clone_documents, make_cache_key, strip_json_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class GraphRAGRetrieval:
     """
     
     def __init__(self, config, llm_client):
+        """初始化图RAG检索器的配置、LLM客户端和运行期缓存。"""
         self.config = config
         self.llm_client = llm_client
         self.driver = None
@@ -72,19 +74,34 @@ class GraphRAGRetrieval:
         self.entity_cache = {}
         self.relation_cache = {}
         self.subgraph_cache = {}
+
+        # 运行期缓存：缓存LLM图查询理解、图路径、子图和最终Document结果。
+        cache_enabled = getattr(config, "cache_enabled", True)
+        cache_max_size = getattr(config, "cache_max_size", 256)
+        cache_ttl_seconds = getattr(config, "cache_ttl_seconds", 3600)
+        self.graph_query_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.path_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.knowledge_subgraph_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.search_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
         
     def initialize(self):
-        """初始化图RAG检索系统"""
+        """初始化图RAG检索系统，并刷新依赖Neo4j当前状态的本地索引。"""
         logger.info("初始化图RAG检索系统...")
         
         # 连接Neo4j
         try:
+            if self.driver:
+                self.driver.close()
+            self.entity_cache.clear()
+            self.relation_cache.clear()
+            self.subgraph_cache.clear()
+            self.clear_cache()
             self.driver = GraphDatabase.driver(
                 self.config.neo4j_uri, 
                 auth=(self.config.neo4j_user, self.config.neo4j_password)
             )
             # 测试连接
-            with self.driver.session() as session:
+            with self._session() as session:
                 session.run("RETURN 1")
             logger.info("Neo4j连接成功")
         except Exception as e:
@@ -93,13 +110,39 @@ class GraphRAGRetrieval:
         
         # 预热：构建实体和关系索引
         self._build_graph_index()
+
+    def _session(self):
+        """创建Neo4j会话，统一使用配置中的数据库名称。"""
+        database = getattr(self.config, "neo4j_database", None)
+        if database:
+            return self.driver.session(database=database)
+        return self.driver.session()
+
+    def clear_cache(self) -> None:
+        """清空图RAG运行期缓存，适用于知识库重建后。"""
+        self.graph_query_cache.clear()
+        self.path_cache.clear()
+        self.knowledge_subgraph_cache.clear()
+        self.search_cache.clear()
+
+    def _graph_query_cache_key(self, graph_query: GraphQuery) -> str:
+        """根据图查询结构生成稳定缓存键。"""
+        return make_cache_key(
+            graph_query.query_type.value,
+            graph_query.source_entities or [],
+            graph_query.target_entities or [],
+            graph_query.relation_types or [],
+            graph_query.max_depth,
+            graph_query.max_nodes,
+            graph_query.constraints or {},
+        )
         
     def _build_graph_index(self):
         """构建图索引以加速查询"""
         logger.info("构建图结构索引...")
         
         try:
-            with self.driver.session() as session:
+            with self._session() as session:
                 # 构建实体索引 - 修复Neo4j语法兼容性问题
                 entity_query = """
                 MATCH (n)
@@ -140,9 +183,15 @@ class GraphRAGRetrieval:
     
     def understand_graph_query(self, query: str) -> GraphQuery:
         """
-        理解查询的图结构意图
+        理解查询的图结构意图，重复问题直接复用LLM分析结果。
         这是图RAG的核心：从自然语言到图查询的转换
         """
+        cache_key = make_cache_key("understand_graph_query", query)
+        cached_query = self.graph_query_cache.get(cache_key)
+        if cached_query is not None:
+            logger.info("图查询理解命中缓存")
+            return cached_query
+
         prompt = f"""
         作为图数据库专家，分析以下查询的图结构意图，并将自然语言问题映射到**已有图结构**上。
         
@@ -240,32 +289,42 @@ class GraphRAGRetrieval:
                 max_tokens=1000
             )
             
-            result = json.loads(response.choices[0].message.content.strip())
+            result = json.loads(strip_json_markdown(response.choices[0].message.content))
             
-            return GraphQuery(
+            graph_query = GraphQuery(
                 query_type=QueryType(result.get("query_type", "subgraph")),
                 source_entities=result.get("source_entities", []),
                 target_entities=result.get("target_entities", []),
                 relation_types=result.get("relation_types", []),
                 max_depth=result.get("max_depth", 2),
-                max_nodes=50
+                max_nodes=50,
+                constraints=result.get("constraints", {})
             )
+            self.graph_query_cache.set(cache_key, graph_query)
+            return graph_query
             
         except Exception as e:
             logger.error(f"查询意图理解失败: {e}")
             # 降级方案：默认子图查询
-            return GraphQuery(
+            graph_query = GraphQuery(
                 query_type=QueryType.SUBGRAPH,
                 source_entities=[query],
                 max_depth=2
             )
+            self.graph_query_cache.set(cache_key, graph_query)
+            return graph_query
     
     def multi_hop_traversal(self, graph_query: GraphQuery) -> List[GraphPath]:
         """
-        多跳图遍历：这是图RAG的核心优势
+        多跳图遍历：这是图RAG的核心优势；缓存相同图查询的路径结果。
         通过图结构发现隐含的知识关联
         """
         logger.info(f"执行多跳遍历: {graph_query.source_entities} -> {graph_query.target_entities}")
+        cache_key = make_cache_key("multi_hop_traversal", self._graph_query_cache_key(graph_query))
+        cached_paths = self.path_cache.get(cache_key)
+        if cached_paths is not None:
+            logger.info("多跳遍历命中缓存")
+            return cached_paths
         
         paths = []
         
@@ -274,7 +333,7 @@ class GraphRAGRetrieval:
             return paths
             
         try:
-            with self.driver.session() as session:
+            with self._session() as session:
                 # 构建多跳遍历查询
                 source_entities = graph_query.source_entities
                 target_keywords = graph_query.target_entities or []
@@ -345,44 +404,60 @@ class GraphRAGRetrieval:
             logger.error(f"多跳遍历失败: {e}")
             
         logger.info(f"多跳遍历完成，找到 {len(paths)} 条路径")
+        self.path_cache.set(cache_key, paths)
         return paths
     
     def extract_knowledge_subgraph(self, graph_query: GraphQuery) -> KnowledgeSubgraph:
         """
-        提取知识子图：获取实体相关的完整知识网络
+        提取知识子图：获取实体相关的完整知识网络，并缓存相同子图查询。
         这体现了图RAG的整体性思维
         """
         logger.info(f"提取知识子图: {graph_query.source_entities}")
+        cache_key = make_cache_key("extract_knowledge_subgraph", self._graph_query_cache_key(graph_query))
+        cached_subgraph = self.knowledge_subgraph_cache.get(cache_key)
+        if cached_subgraph is not None:
+            logger.info("知识子图命中缓存")
+            return cached_subgraph
         
         if not self.driver:
             logger.error("Neo4j连接未建立")
-            return self._fallback_subgraph_extraction(graph_query)
+            subgraph = self._fallback_subgraph_extraction(graph_query)
+            self.knowledge_subgraph_cache.set(cache_key, subgraph)
+            return subgraph
         
         try:
-            with self.driver.session() as session:
-                # 简化的子图提取（不依赖APOC）
+            with self._session() as session:
+                # 简化的子图提取（不依赖APOC），并把变长路径中的关系展开去重。
                 cypher_query = f"""
                 // 找到源实体
                 UNWIND $source_entities as entity_name
                 MATCH (source)
                 WHERE source.name CONTAINS entity_name 
+                   OR entity_name CONTAINS source.name
                    OR source.nodeId = entity_name
                 
                 // 获取指定深度的邻居
-                MATCH (source)-[r*1..{graph_query.max_depth}]-(neighbor)
-                WITH source, collect(DISTINCT neighbor) as neighbors, 
-                     collect(DISTINCT r) as relationships
-                WHERE size(neighbors) <= $max_nodes
+                MATCH path = (source)-[*1..{graph_query.max_depth}]-(neighbor)
+                WITH source,
+                     collect(DISTINCT neighbor) as all_neighbors,
+                     collect(DISTINCT path) as paths
+                UNWIND paths as p
+                UNWIND relationships(p) as rel
+                WITH source,
+                     all_neighbors,
+                     collect(DISTINCT rel) as all_relationships
                 
                 // 计算图指标
-                WITH source, neighbors, relationships,
-                     size(neighbors) as node_count,
-                     size(relationships) as rel_count
+                WITH source,
+                     all_neighbors[0..$max_nodes] as neighbors,
+                     all_relationships[0..$max_nodes] as relationships,
+                     size(all_neighbors) as node_count,
+                     size(all_relationships) as rel_count
                 
                 RETURN 
                     source,
-                    neighbors[0..{graph_query.max_nodes}] as nodes,
-                    relationships[0..{graph_query.max_nodes}] as rels,
+                    neighbors as nodes,
+                    relationships as rels,
                     {{
                         node_count: node_count,
                         relationship_count: rel_count,
@@ -397,13 +472,17 @@ class GraphRAGRetrieval:
                 
                 record = result.single()
                 if record:
-                    return self._build_knowledge_subgraph(record)
+                    subgraph = self._build_knowledge_subgraph(record)
+                    self.knowledge_subgraph_cache.set(cache_key, subgraph)
+                    return subgraph
                     
         except Exception as e:
             logger.error(f"子图提取失败: {e}")
             
         # 降级方案：简单邻居查询
-        return self._fallback_subgraph_extraction(graph_query)
+        subgraph = self._fallback_subgraph_extraction(graph_query)
+        self.knowledge_subgraph_cache.set(cache_key, subgraph)
+        return subgraph
     
     def graph_structure_reasoning(self, subgraph: KnowledgeSubgraph, query: str) -> List[str]:
         """
@@ -481,9 +560,14 @@ class GraphRAGRetrieval:
     
     def graph_rag_search(self, query: str, top_k: int = 5) -> List[Document]:
         """
-        图RAG主搜索接口：整合所有图RAG能力
+        图RAG主搜索接口：整合所有图RAG能力，并缓存最终Document结果。
         """
         logger.info(f"开始图RAG检索: {query}")
+        cache_key = make_cache_key("graph_rag_search", query, top_k)
+        cached_docs = self.search_cache.get(cache_key)
+        if cached_docs is not None:
+            logger.info("图RAG检索命中缓存")
+            return clone_documents(cached_docs)
         
         if not self.driver:
             logger.warning("Neo4j连接未建立，返回空结果")
@@ -520,7 +604,9 @@ class GraphRAGRetrieval:
             results = self._rank_by_graph_relevance(results, query)
             
             logger.info(f"图RAG检索完成，返回 {len(results[:top_k])} 个结果")
-            return results[:top_k]
+            final_docs = results[:top_k]
+            self.search_cache.set(cache_key, final_docs)
+            return clone_documents(final_docs)
             
         except Exception as e:
             logger.error(f"图RAG检索失败: {e}")
@@ -542,8 +628,9 @@ class GraphRAGRetrieval:
             
             relationships = []
             for rel in record["rels"]:
+                rel_type = getattr(rel, "type", None) or type(rel).__name__
                 relationships.append({
-                    "type": type(rel).__name__,
+                    "type": rel_type,
                     "properties": dict(rel)
                 })
             
@@ -564,7 +651,13 @@ class GraphRAGRetrieval:
         try:
             central_nodes = [dict(record["source"])]
             connected_nodes = [dict(node) for node in record["nodes"]]
-            relationships = [dict(rel) for rel in record["rels"]]
+            relationships = [
+                {
+                    "type": getattr(rel, "type", None) or type(rel).__name__,
+                    "properties": dict(rel),
+                }
+                for rel in record["rels"]
+            ]
             
             return KnowledgeSubgraph(
                 central_nodes=central_nodes,
@@ -677,12 +770,109 @@ class GraphRAGRetrieval:
         return chains[:3]
     
     def _find_entity_relations(self, graph_query: GraphQuery, session) -> List[GraphPath]:
-        """查找实体间关系"""
-        return []
+        """查找实体间关系；当没有显式目标时返回源实体附近的高相关路径。"""
+        paths: List[GraphPath] = []
+        source_entities = graph_query.source_entities or []
+        if not source_entities:
+            return paths
+
+        target_keywords = graph_query.target_entities or (
+            source_entities if len(source_entities) > 1 else []
+        )
+        target_filter_clause = ""
+        params = {
+            "source_entities": source_entities,
+            "relation_types": graph_query.relation_types or [],
+            "limit": min(graph_query.max_nodes, 20),
+        }
+
+        if target_keywords:
+            target_filter_clause = """
+              AND ANY(kw IN $target_keywords WHERE
+                  (target.name IS NOT NULL AND (target.name CONTAINS kw OR kw CONTAINS target.name)) OR
+                  target.nodeId = kw
+              )
+            """
+            params["target_keywords"] = target_keywords
+
+        cypher_query = f"""
+        UNWIND $source_entities as source_name
+        MATCH (source)
+        WHERE (source.name IS NOT NULL AND (source.name CONTAINS source_name OR source_name CONTAINS source.name))
+           OR source.nodeId = source_name
+        MATCH path = (source)-[*1..{max(1, graph_query.max_depth)}]-(target)
+        WHERE NOT source = target
+        {target_filter_clause}
+        WITH path,
+             length(path) as path_len,
+             relationships(path) as rels,
+             nodes(path) as path_nodes
+        WITH path, path_len, rels, path_nodes,
+             (1.0 / path_len) +
+             (CASE WHEN ANY(r IN rels WHERE type(r) IN $relation_types) THEN 0.3 ELSE 0.0 END) as relevance
+        ORDER BY relevance DESC
+        LIMIT $limit
+        RETURN path, path_len, rels, path_nodes, relevance
+        """
+
+        for record in session.run(cypher_query, params):
+            path_data = self._parse_neo4j_path(record)
+            if path_data:
+                path_data.path_type = "entity_relation"
+                paths.append(path_data)
+
+        return paths
     
     def _find_shortest_paths(self, graph_query: GraphQuery, session) -> List[GraphPath]:
-        """查找最短路径"""
-        return []
+        """查找源实体到目标实体的最短路径，补齐原先空实现。"""
+        paths: List[GraphPath] = []
+        source_entities = graph_query.source_entities or []
+        target_entities = graph_query.target_entities or []
+
+        if not source_entities:
+            return paths
+        if not target_entities and len(source_entities) > 1:
+            target_entities = source_entities
+        if not target_entities:
+            return paths
+
+        cypher_query = f"""
+        UNWIND $source_entities as source_name
+        UNWIND $target_entities as target_name
+        WITH source_name, target_name
+        WHERE source_name <> target_name
+        MATCH (source), (target)
+        WHERE ((source.name IS NOT NULL AND (source.name CONTAINS source_name OR source_name CONTAINS source.name))
+               OR source.nodeId = source_name)
+          AND ((target.name IS NOT NULL AND (target.name CONTAINS target_name OR target_name CONTAINS target.name))
+               OR target.nodeId = target_name)
+        MATCH path = shortestPath((source)-[*1..{max(1, graph_query.max_depth)}]-(target))
+        WITH path,
+             length(path) as path_len,
+             relationships(path) as rels,
+             nodes(path) as path_nodes
+        WITH path, path_len, rels, path_nodes,
+             (1.0 / path_len) +
+             (CASE WHEN ANY(r IN rels WHERE type(r) IN $relation_types) THEN 0.3 ELSE 0.0 END) as relevance
+        ORDER BY relevance DESC
+        LIMIT $limit
+        RETURN path, path_len, rels, path_nodes, relevance
+        """
+
+        params = {
+            "source_entities": source_entities,
+            "target_entities": target_entities,
+            "relation_types": graph_query.relation_types or [],
+            "limit": min(graph_query.max_nodes, 20),
+        }
+
+        for record in session.run(cypher_query, params):
+            path_data = self._parse_neo4j_path(record)
+            if path_data:
+                path_data.path_type = "shortest_path"
+                paths.append(path_data)
+
+        return paths
     
     def _fallback_subgraph_extraction(self, graph_query: GraphQuery) -> KnowledgeSubgraph:
         """降级子图提取"""
@@ -698,4 +888,4 @@ class GraphRAGRetrieval:
         """关闭资源连接"""
         if hasattr(self, 'driver') and self.driver:
             self.driver.close()
-            logger.info("图RAG检索系统已关闭") 
+            logger.info("图RAG检索系统已关闭")

@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from pymilvus import MilvusClient, DataType, CollectionSchema, FieldSchema
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-import numpy as np
+from .cache_utils import TTLCache, make_cache_key
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,11 @@ class MilvusIndexConstructionModule:
                  port: int = 19530,
                  collection_name: str = "cooking_knowledge",
                  dimension: int = 512,
-                 model_name: str = "BAAI/bge-small-zh-v1.5"):
+                 model_name: str = "BAAI/bge-small-zh-v1.5",
+                 embedding_device: str = "auto",
+                 cache_enabled: bool = True,
+                 cache_max_size: int = 256,
+                 cache_ttl_seconds: int = 3600):
         """
         初始化Milvus索引构建模块
 
@@ -31,19 +35,42 @@ class MilvusIndexConstructionModule:
             collection_name: 集合名称
             dimension: 向量维度
             model_name: 嵌入模型名称
+            embedding_device: 嵌入模型运行设备，auto会优先使用可用GPU
+            cache_enabled: 是否启用查询向量和搜索结果缓存
+            cache_max_size: 缓存最大条目数
+            cache_ttl_seconds: 缓存过期时间
         """
         self.host = host
         self.port = port
         self.collection_name = collection_name
         self.dimension = dimension
         self.model_name = model_name
+        self.embedding_device = self._resolve_embedding_device(embedding_device)
         
         self.client = None
         self.embeddings = None
         self.collection_created = False
+        self.query_embedding_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.search_result_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
         
         self._setup_client()
         self._setup_embeddings()
+
+    def _resolve_embedding_device(self, requested_device: str) -> str:
+        """解析嵌入模型运行设备，auto模式下优先使用CUDA。"""
+        device = (requested_device or "auto").lower()
+        if device != "auto":
+            return device
+
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception as e:
+            logger.debug(f"检测CUDA设备失败，回退到CPU: {e}")
+
+        return "cpu"
     
     def _safe_truncate(self, text: str, max_length: int) -> str:
         """
@@ -77,12 +104,12 @@ class MilvusIndexConstructionModule:
             raise
     
     def _setup_embeddings(self):
-        """初始化嵌入模型"""
-        logger.info(f"正在初始化嵌入模型: {self.model_name}")
+        """初始化嵌入模型，并按配置选择CPU或GPU。"""
+        logger.info(f"正在初始化嵌入模型: {self.model_name}，设备: {self.embedding_device}")
         
         self.embeddings = HuggingFaceEmbeddings(
             model_name=self.model_name,
-            model_kwargs={'device': 'cpu'},
+            model_kwargs={'device': self.embedding_device},
             encode_kwargs={'normalize_embeddings': True}
         )
         
@@ -212,6 +239,8 @@ class MilvusIndexConstructionModule:
             raise ValueError("文档块列表不能为空")
         
         try:
+            self._clear_search_caches()
+
             # 1. 创建集合（如果schema不兼容则强制重新创建）
             if not self.create_collection(force_recreate=True):
                 return False
@@ -286,6 +315,8 @@ class MilvusIndexConstructionModule:
         logger.info(f"正在添加 {len(new_chunks)} 个新文档到索引...")
         
         try:
+            self._clear_search_caches()
+
             # 生成向量
             texts = [chunk.page_content for chunk in new_chunks]
             vectors = self.embeddings.embed_documents(texts)
@@ -321,6 +352,27 @@ class MilvusIndexConstructionModule:
         except Exception as e:
             logger.error(f"添加新文档失败: {e}")
             return False
+
+    def _filters_cache_key(self, filters: Optional[Dict[str, Any]]) -> str:
+        """将过滤条件转成稳定缓存键片段。"""
+        return make_cache_key(filters or {})
+
+    def _embed_query_cached(self, query: str) -> List[float]:
+        """生成查询向量；同一查询重复出现时直接复用缓存向量。"""
+        cache_key = make_cache_key("query_embedding", self.model_name, query)
+        cached_vector = self.query_embedding_cache.get(cache_key)
+        if cached_vector is not None:
+            logger.debug("查询向量命中缓存")
+            return cached_vector
+
+        query_vector = self.embeddings.embed_query(query)
+        self.query_embedding_cache.set(cache_key, query_vector)
+        return query_vector
+
+    def _clear_search_caches(self) -> None:
+        """清空向量查询相关缓存，避免索引变更后返回旧结果。"""
+        self.query_embedding_cache.clear()
+        self.search_result_cache.clear()
     
     def similarity_search(self, query: str, k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
@@ -338,8 +390,20 @@ class MilvusIndexConstructionModule:
             raise ValueError("请先构建或加载向量索引")
         
         try:
+            search_cache_key = make_cache_key(
+                "milvus_similarity_search",
+                self.collection_name,
+                query,
+                k,
+                self._filters_cache_key(filters),
+            )
+            cached_results = self.search_result_cache.get(search_cache_key)
+            if cached_results is not None:
+                logger.info("Milvus相似度搜索命中缓存")
+                return cached_results
+
             # 生成查询向量
-            query_vector = self.embeddings.embed_query(query)
+            query_vector = self._embed_query_cached(query)
             
             # 构建过滤表达式
             filter_expr = ""
@@ -408,6 +472,7 @@ class MilvusIndexConstructionModule:
                     }
                     formatted_results.append(result)
             
+            self.search_result_cache.set(search_cache_key, formatted_results)
             return formatted_results
             
         except Exception as e:
@@ -449,6 +514,7 @@ class MilvusIndexConstructionModule:
                 self.client.drop_collection(self.collection_name)
                 logger.info(f"集合 {self.collection_name} 已删除")
                 self.collection_created = False
+                self._clear_search_caches()
                 return True
             else:
                 logger.info(f"集合 {self.collection_name} 不存在")
@@ -500,4 +566,4 @@ class MilvusIndexConstructionModule:
     
     def __del__(self):
         """析构函数"""
-        self.close() 
+        self.close()

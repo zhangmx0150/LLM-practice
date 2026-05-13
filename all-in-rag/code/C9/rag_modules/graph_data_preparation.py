@@ -55,17 +55,16 @@ class GraphDataPreparationModule:
         self._connect()
     
     def _connect(self):
-        """建立Neo4j连接"""
+        """建立Neo4j连接，并通过会话指定数据库。"""
         try:
             self.driver = GraphDatabase.driver(
-                self.uri, 
-                auth=(self.user, self.password),
-                database=self.database
+                self.uri,
+                auth=(self.user, self.password)
             )
             logger.info(f"已连接到Neo4j数据库: {self.uri}")
             
             # 测试连接
-            with self.driver.session() as session:
+            with self._session() as session:
                 result = session.run("RETURN 1 as test")
                 test_result = result.single()
                 if test_result:
@@ -74,6 +73,12 @@ class GraphDataPreparationModule:
         except Exception as e:
             logger.error(f"连接Neo4j失败: {e}")
             raise
+
+    def _session(self):
+        """创建Neo4j会话，集中处理数据库名称配置。"""
+        if self.database:
+            return self.driver.session(database=self.database)
+        return self.driver.session()
     
     def close(self):
         """关闭数据库连接"""
@@ -90,7 +95,7 @@ class GraphDataPreparationModule:
         """
         logger.info("正在从Neo4j加载图数据...")
         
-        with self.driver.session() as session:
+        with self._session() as session:
             # 加载所有菜谱节点，从Category关系中读取分类信息
             recipes_query = """
             MATCH (r:Recipe)
@@ -176,137 +181,169 @@ class GraphDataPreparationModule:
             'cooking_steps': len(self.cooking_steps)
         }
     
+    def _load_recipe_ingredients(self, session, recipe_ids: List[str]) -> Dict[str, List[str]]:
+        """批量读取所有菜谱的食材信息，避免按菜谱逐个查询Neo4j。"""
+        ingredient_map: Dict[str, List[str]] = {recipe_id: [] for recipe_id in recipe_ids}
+        if not recipe_ids:
+            return ingredient_map
+
+        ingredients_query = """
+        MATCH (r:Recipe)-[req:REQUIRES]->(i:Ingredient)
+        WHERE r.nodeId IN $recipe_ids
+        RETURN r.nodeId as recipe_id,
+               i.name as name,
+               i.category as category,
+               req.amount as amount,
+               req.unit as unit,
+               i.description as description
+        ORDER BY r.nodeId, i.name
+        """
+
+        for record in session.run(ingredients_query, {"recipe_ids": recipe_ids}):
+            ingredient_map.setdefault(record["recipe_id"], []).append(
+                self._format_ingredient(record)
+            )
+
+        return ingredient_map
+
+    def _load_recipe_steps(self, session, recipe_ids: List[str]) -> Dict[str, List[str]]:
+        """批量读取所有菜谱的制作步骤，减少知识库构建阶段的数据库往返。"""
+        step_map: Dict[str, List[str]] = {recipe_id: [] for recipe_id in recipe_ids}
+        if not recipe_ids:
+            return step_map
+
+        steps_query = """
+        MATCH (r:Recipe)-[c:CONTAINS_STEP]->(s:CookingStep)
+        WHERE r.nodeId IN $recipe_ids
+        RETURN r.nodeId as recipe_id,
+               s.name as name,
+               s.description as description,
+               s.stepNumber as stepNumber,
+               s.methods as methods,
+               s.tools as tools,
+               s.timeEstimate as timeEstimate,
+               c.stepOrder as stepOrder
+        ORDER BY r.nodeId, COALESCE(c.stepOrder, s.stepNumber, 999)
+        """
+
+        for record in session.run(steps_query, {"recipe_ids": recipe_ids}):
+            step_map.setdefault(record["recipe_id"], []).append(
+                self._format_step(record)
+            )
+
+        return step_map
+
+    def _format_ingredient(self, record) -> str:
+        """把Neo4j食材记录格式化为原文档中的食材文本。"""
+        amount = record.get("amount", "")
+        unit = record.get("unit", "")
+        ingredient_text = f"{record['name']}"
+        if amount and unit:
+            ingredient_text += f"({amount}{unit})"
+        if record.get("description"):
+            ingredient_text += f" - {record['description']}"
+        return ingredient_text
+
+    def _format_step(self, record) -> str:
+        """把Neo4j步骤记录格式化为原文档中的步骤文本。"""
+        step_text = f"步骤: {record['name']}"
+        if record.get("description"):
+            step_text += f"\n描述: {record['description']}"
+        if record.get("methods"):
+            step_text += f"\n方法: {record['methods']}"
+        if record.get("tools"):
+            step_text += f"\n工具: {record['tools']}"
+        if record.get("timeEstimate"):
+            step_text += f"\n时间: {record['timeEstimate']}"
+        return step_text
+
+    def _create_recipe_document(self, recipe: GraphNode, ingredients_info: List[str], steps_info: List[str]) -> Document:
+        """根据菜谱节点、食材文本和步骤文本创建结构化Document。"""
+        recipe_id = recipe.node_id
+        recipe_name = recipe.name
+        content_parts = [f"# {recipe_name}"]
+
+        if recipe.properties.get("description"):
+            content_parts.append(f"\n## 菜品描述\n{recipe.properties['description']}")
+
+        if recipe.properties.get("cuisineType"):
+            content_parts.append(f"\n菜系: {recipe.properties['cuisineType']}")
+
+        if recipe.properties.get("difficulty"):
+            content_parts.append(f"难度: {recipe.properties['difficulty']}星")
+
+        if recipe.properties.get("prepTime") or recipe.properties.get("cookTime"):
+            time_info = []
+            if recipe.properties.get("prepTime"):
+                time_info.append(f"准备时间: {recipe.properties['prepTime']}")
+            if recipe.properties.get("cookTime"):
+                time_info.append(f"烹饪时间: {recipe.properties['cookTime']}")
+            content_parts.append(f"\n时间信息: {', '.join(time_info)}")
+
+        if recipe.properties.get("servings"):
+            content_parts.append(f"份量: {recipe.properties['servings']}")
+
+        if ingredients_info:
+            content_parts.append("\n## 所需食材")
+            for i, ingredient in enumerate(ingredients_info, 1):
+                content_parts.append(f"{i}. {ingredient}")
+
+        if steps_info:
+            content_parts.append("\n## 制作步骤")
+            for i, step in enumerate(steps_info, 1):
+                content_parts.append(f"\n### 第{i}步\n{step}")
+
+        if recipe.properties.get("tags"):
+            content_parts.append(f"\n## 标签\n{recipe.properties['tags']}")
+
+        full_content = "\n".join(content_parts)
+        return Document(
+            page_content=full_content,
+            metadata={
+                "node_id": recipe_id,
+                "recipe_name": recipe_name,
+                "node_type": "Recipe",
+                "category": recipe.properties.get("category", "未知"),
+                "cuisine_type": recipe.properties.get("cuisineType", "未知"),
+                "difficulty": recipe.properties.get("difficulty", 0),
+                "prep_time": recipe.properties.get("prepTime", ""),
+                "cook_time": recipe.properties.get("cookTime", ""),
+                "servings": recipe.properties.get("servings", ""),
+                "ingredients_count": len(ingredients_info),
+                "steps_count": len(steps_info),
+                "doc_type": "recipe",
+                "content_length": len(full_content),
+            },
+        )
+
     def build_recipe_documents(self) -> List[Document]:
         """
-        构建菜谱文档，集成相关的食材和步骤信息
+        构建菜谱文档，批量集成食材和步骤信息以避免N+1查询。
         
         Returns:
             结构化的菜谱文档列表
         """
         logger.info("正在构建菜谱文档...")
-        
+
+        recipe_ids = [recipe.node_id for recipe in self.recipes]
+        with self._session() as session:
+            ingredients_by_recipe = self._load_recipe_ingredients(session, recipe_ids)
+            steps_by_recipe = self._load_recipe_steps(session, recipe_ids)
+
         documents = []
-        
-        with self.driver.session() as session:
-            for recipe in self.recipes:
-                try:
-                    recipe_id = recipe.node_id
-                    recipe_name = recipe.name
-                    
-                    # 获取菜谱的相关食材
-                    ingredients_query = """
-                    MATCH (r:Recipe {nodeId: $recipe_id})-[req:REQUIRES]->(i:Ingredient)
-                    RETURN i.name as name, i.category as category, 
-                           req.amount as amount, req.unit as unit,
-                           i.description as description
-                    ORDER BY i.name
-                    """
-                    
-                    ingredients_result = session.run(ingredients_query, {"recipe_id": recipe_id})
-                    ingredients_info = []
-                    for ing_record in ingredients_result:
-                        amount = ing_record.get("amount", "")
-                        unit = ing_record.get("unit", "")
-                        ingredient_text = f"{ing_record['name']}"
-                        if amount and unit:
-                            ingredient_text += f"({amount}{unit})"
-                        if ing_record.get("description"):
-                            ingredient_text += f" - {ing_record['description']}"
-                        ingredients_info.append(ingredient_text)
-                    
-                    # 获取菜谱的烹饪步骤
-                    steps_query = """
-                    MATCH (r:Recipe {nodeId: $recipe_id})-[c:CONTAINS_STEP]->(s:CookingStep)
-                    RETURN s.name as name, s.description as description,
-                           s.stepNumber as stepNumber, s.methods as methods,
-                           s.tools as tools, s.timeEstimate as timeEstimate,
-                           c.stepOrder as stepOrder
-                    ORDER BY COALESCE(c.stepOrder, s.stepNumber, 999)
-                    """
-                    
-                    steps_result = session.run(steps_query, {"recipe_id": recipe_id})
-                    steps_info = []
-                    for step_record in steps_result:
-                        step_text = f"步骤: {step_record['name']}"
-                        if step_record.get("description"):
-                            step_text += f"\n描述: {step_record['description']}"
-                        if step_record.get("methods"):
-                            step_text += f"\n方法: {step_record['methods']}"
-                        if step_record.get("tools"):
-                            step_text += f"\n工具: {step_record['tools']}"
-                        if step_record.get("timeEstimate"):
-                            step_text += f"\n时间: {step_record['timeEstimate']}"
-                        steps_info.append(step_text)
-                    
-                    # 构建完整的菜谱文档内容
-                    content_parts = [f"# {recipe_name}"]
-                    
-                    # 添加菜谱基本信息
-                    if recipe.properties.get("description"):
-                        content_parts.append(f"\n## 菜品描述\n{recipe.properties['description']}")
-                    
-                    if recipe.properties.get("cuisineType"):
-                        content_parts.append(f"\n菜系: {recipe.properties['cuisineType']}")
-                    
-                    if recipe.properties.get("difficulty"):
-                        content_parts.append(f"难度: {recipe.properties['difficulty']}星")
-                    
-                    if recipe.properties.get("prepTime") or recipe.properties.get("cookTime"):
-                        time_info = []
-                        if recipe.properties.get("prepTime"):
-                            time_info.append(f"准备时间: {recipe.properties['prepTime']}")
-                        if recipe.properties.get("cookTime"):
-                            time_info.append(f"烹饪时间: {recipe.properties['cookTime']}")
-                        content_parts.append(f"\n时间信息: {', '.join(time_info)}")
-                    
-                    if recipe.properties.get("servings"):
-                        content_parts.append(f"份量: {recipe.properties['servings']}")
-                    
-                    # 添加食材信息
-                    if ingredients_info:
-                        content_parts.append("\n## 所需食材")
-                        for i, ingredient in enumerate(ingredients_info, 1):
-                            content_parts.append(f"{i}. {ingredient}")
-                    
-                    # 添加步骤信息
-                    if steps_info:
-                        content_parts.append("\n## 制作步骤")
-                        for i, step in enumerate(steps_info, 1):
-                            content_parts.append(f"\n### 第{i}步\n{step}")
-                    
-                    # 添加标签信息
-                    if recipe.properties.get("tags"):
-                        content_parts.append(f"\n## 标签\n{recipe.properties['tags']}")
-                    
-                    # 组合成最终内容
-                    full_content = "\n".join(content_parts)
-                    
-                    # 创建文档对象
-                    doc = Document(
-                        page_content=full_content,
-                        metadata={
-                            "node_id": recipe_id,
-                            "recipe_name": recipe_name,
-                            "node_type": "Recipe",
-                            "category": recipe.properties.get("category", "未知"),
-                            "cuisine_type": recipe.properties.get("cuisineType", "未知"),
-                            "difficulty": recipe.properties.get("difficulty", 0),
-                            "prep_time": recipe.properties.get("prepTime", ""),
-                            "cook_time": recipe.properties.get("cookTime", ""),
-                            "servings": recipe.properties.get("servings", ""),
-                            "ingredients_count": len(ingredients_info),
-                            "steps_count": len(steps_info),
-                            "doc_type": "recipe",
-                            "content_length": len(full_content)
-                        }
-                    )
-                    
-                    documents.append(doc)
-                    
-                except Exception as e:
-                    logger.warning(f"构建菜谱文档失败 {recipe_name} (ID: {recipe_id}): {e}")
-                    continue
-        
+        for recipe in self.recipes:
+            try:
+                recipe_id = recipe.node_id
+                doc = self._create_recipe_document(
+                    recipe,
+                    ingredients_by_recipe.get(recipe_id, []),
+                    steps_by_recipe.get(recipe_id, []),
+                )
+                documents.append(doc)
+            except Exception as e:
+                logger.warning(f"构建菜谱文档失败 {recipe.name} (ID: {recipe.node_id}): {e}")
+                continue
+
         self.documents = documents
         logger.info(f"成功构建 {len(documents)} 个菜谱文档")
         return documents
@@ -455,4 +492,4 @@ class GraphDataPreparationModule:
     
     def __del__(self):
         """析构函数，确保关闭连接"""
-        self.close() 
+        self.close()

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 
 from langchain_core.documents import Document
+from .cache_utils import strip_json_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class GraphIndexingModule:
     """
     
     def __init__(self, config, llm_client):
+        """初始化图键值索引存储与键到实体/关系的反向映射。"""
         self.config = config
         self.llm_client = llm_client
         
@@ -236,7 +238,7 @@ class GraphIndexingModule:
                 f"{source_entity.entity_name}_食材",
                 target_entity.entity_name
             ])
-        elif relation_type == "HAS_STEP":
+        elif relation_type in {"HAS_STEP", "CONTAINS_STEP"}:
             # 菜谱-步骤关系的主题键
             keys.extend([
                 "制作步骤",
@@ -285,7 +287,7 @@ class GraphIndexingModule:
                 max_tokens=200
             )
             
-            result = json.loads(response.choices[0].message.content.strip())
+            result = json.loads(strip_json_markdown(response.choices[0].message.content))
             return result.get("keywords", [])
             
         except Exception as e:
@@ -384,4 +386,4 @@ class GraphIndexingModule:
                 "Ingredient": len([kv for kv in self.entity_kv_store.values() if kv.entity_type == "Ingredient"]),
                 "CookingStep": len([kv for kv in self.entity_kv_store.values() if kv.entity_type == "CookingStep"])
             }
-        } 
+        }

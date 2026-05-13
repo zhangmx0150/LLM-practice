@@ -43,6 +43,7 @@ class AdvancedGraphRAGSystem:
     """
     
     def __init__(self, config: Optional[GraphRAGConfig] = None):
+        """创建系统对象并准备各核心模块的占位引用。"""
         self.config = config or DEFAULT_CONFIG
         
         # 核心模块
@@ -79,7 +80,11 @@ class AdvancedGraphRAGSystem:
                 port=self.config.milvus_port,
                 collection_name=self.config.milvus_collection_name,
                 dimension=self.config.milvus_dimension,
-                model_name=self.config.embedding_model
+                model_name=self.config.embedding_model,
+                embedding_device=self.config.embedding_device,
+                cache_enabled=self.config.cache_enabled,
+                cache_max_size=self.config.cache_max_size,
+                cache_ttl_seconds=self.config.cache_ttl_seconds
             )
             
             # 3. 生成模块
@@ -87,7 +92,10 @@ class AdvancedGraphRAGSystem:
             self.generation_module = GenerationIntegrationModule(
                 model_name=self.config.llm_model,
                 temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
+                max_tokens=self.config.max_tokens,
+                cache_enabled=self.config.cache_enabled,
+                answer_cache_max_size=self.config.answer_cache_max_size,
+                answer_cache_ttl_seconds=self.config.answer_cache_ttl_seconds
             )
             
             # 4. 传统混合检索模块
@@ -183,7 +191,7 @@ class AdvancedGraphRAGSystem:
             raise
     
     def _initialize_retrievers(self, chunks: List = None):
-        """初始化检索器"""
+        """初始化检索器，并在重新初始化时清理运行期缓存。"""
         print("初始化检索引擎...")
         
         # 如果没有chunks，从数据模块获取
@@ -195,6 +203,9 @@ class AdvancedGraphRAGSystem:
         
         # 初始化图RAG检索器
         self.graph_rag_retrieval.initialize()
+
+        # 检索器重建后旧缓存可能指向旧Document或旧图结果，需要清空。
+        self._clear_runtime_caches()
         
         self.system_ready = True
         print("✅ 检索引擎初始化完成！")
@@ -222,6 +233,17 @@ class AdvancedGraphRAGSystem:
         if stats.get('categories'):
             categories = list(stats['categories'].keys())[:10]
             print(f"   🏷️ 主要分类: {', '.join(categories)}")
+
+    def _clear_runtime_caches(self):
+        """清理问答运行期缓存，保证知识库变更后不复用旧结果。"""
+        if self.generation_module and hasattr(self.generation_module, "clear_cache"):
+            self.generation_module.clear_cache()
+        if self.traditional_retrieval and hasattr(self.traditional_retrieval, "clear_cache"):
+            self.traditional_retrieval.clear_cache()
+        if self.graph_rag_retrieval and hasattr(self.graph_rag_retrieval, "clear_cache"):
+            self.graph_rag_retrieval.clear_cache()
+        if self.query_router and hasattr(self.query_router, "clear_cache"):
+            self.query_router.clear_cache()
     
     def ask_question_with_routing(self, question: str, stream: bool = False, explain_routing: bool = False):
         """
@@ -232,9 +254,11 @@ class AdvancedGraphRAGSystem:
             
         print(f"\n❓ 用户问题: {question}")
         
-        # 显示路由决策解释（可选）
+        # 显示路由决策解释（可选）：先分析一次，后续路由复用，避免重复LLM调用。
+        analysis = None
         if explain_routing:
-            explanation = self.query_router.explain_routing_decision(question)
+            analysis = self.query_router.analyze_query(question)
+            explanation = self.query_router.explain_routing_decision(question, analysis=analysis)
             print(explanation)
         
         start_time = time.time()
@@ -242,7 +266,7 @@ class AdvancedGraphRAGSystem:
         try:
             # 1. 智能路由检索
             print("执行智能查询路由...")
-            relevant_docs, analysis = self.query_router.route_query(question, self.config.top_k)
+            relevant_docs, analysis = self.query_router.route_query(question, self.config.top_k, analysis=analysis)
             
             # 2. 显示路由信息
             strategy_icons = {
@@ -389,6 +413,8 @@ class AdvancedGraphRAGSystem:
                 print("✅ 现有集合已删除")
             else:
                 print("删除集合时出现问题，继续重建...")
+
+            self._clear_runtime_caches()
             
             # 重新构建知识库
             print("开始重建知识库...")
@@ -436,4 +462,4 @@ def main():
         print(f"\n❌ 系统错误: {e}")
 
 if __name__ == "__main__":
-    main() 
+    main()

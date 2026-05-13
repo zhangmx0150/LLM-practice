@@ -7,11 +7,13 @@
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Tuple, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
 
 from langchain_core.documents import Document
+from .cache_utils import TTLCache, clone_documents, make_cache_key, strip_json_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ class IntelligentQueryRouter:
                  graph_rag_retrieval,    # 图RAG检索模块
                  llm_client,
                  config):
+        """初始化路由器，绑定两类检索器、LLM客户端、统计信息和缓存。"""
         self.traditional_retrieval = traditional_retrieval
         self.graph_rag_retrieval = graph_rag_retrieval
         self.llm_client = llm_client
@@ -60,12 +63,27 @@ class IntelligentQueryRouter:
             "combined_count": 0,
             "total_queries": 0
         }
+        cache_enabled = getattr(config, "cache_enabled", True)
+        cache_max_size = getattr(config, "cache_max_size", 256)
+        cache_ttl_seconds = getattr(config, "cache_ttl_seconds", 3600)
+        self.analysis_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+        self.route_cache = TTLCache(cache_max_size, cache_ttl_seconds, cache_enabled)
+
+    def clear_cache(self) -> None:
+        """清空路由器缓存，适用于知识库重建或希望重新分析路由的场景。"""
+        self.analysis_cache.clear()
+        self.route_cache.clear()
         
     def analyze_query(self, query: str) -> QueryAnalysis:
         """
-        深度分析查询特征，决定最佳检索策略
+        深度分析查询特征，决定最佳检索策略；重复查询直接复用LLM分析结果。
         """
         logger.info(f"分析查询特征: {query}")
+        cache_key = make_cache_key("analyze_query", query)
+        cached_analysis = self.analysis_cache.get(cache_key)
+        if cached_analysis is not None:
+            logger.info("查询分析命中缓存")
+            return cached_analysis
         
         # 使用LLM进行智能分析
         analysis_prompt = f"""
@@ -119,17 +137,8 @@ class IntelligentQueryRouter:
                 max_tokens=800
             )
 
-            # 🌟 新增：清洗大模型返回的 Markdown 标记
-            raw_content = response.choices[0].message.content.strip()
-            if raw_content.startswith("```json"):
-                raw_content = raw_content[7:]
-            elif raw_content.startswith("```"):
-                raw_content = raw_content[3:]
-            if raw_content.endswith("```"):
-                raw_content = raw_content[:-3]
-            raw_content = raw_content.strip()
-
-            result = json.loads(raw_content)
+            # 清洗大模型返回的 Markdown 标记。
+            result = json.loads(strip_json_markdown(response.choices[0].message.content))
 
             analysis = QueryAnalysis(
                 query_complexity=result.get("query_complexity", 0.5),
@@ -142,12 +151,15 @@ class IntelligentQueryRouter:
             )
             
             logger.info(f"查询分析完成: {analysis.recommended_strategy.value} (置信度: {analysis.confidence:.2f})")
+            self.analysis_cache.set(cache_key, analysis)
             return analysis
             
         except Exception as e:
             logger.error(f"查询分析失败: {e}")
             # 降级方案：基于规则的简单分析
-            return self._rule_based_analysis(query)
+            analysis = self._rule_based_analysis(query)
+            self.analysis_cache.set(cache_key, analysis)
+            return analysis
     
     def _rule_based_analysis(self, query: str) -> QueryAnalysis:
         """基于规则的降级分析"""
@@ -173,17 +185,22 @@ class IntelligentQueryRouter:
             reasoning="基于规则的简单分析"
         )
     
-    def route_query(self, query: str, top_k: int = 5) -> Tuple[List[Document], QueryAnalysis]:
+    def route_query(self, query: str, top_k: int = 5, analysis: Optional[QueryAnalysis] = None) -> Tuple[List[Document], QueryAnalysis]:
         """
-        智能路由查询到最适合的检索引擎
+        智能路由查询到最适合的检索引擎；可复用外部已分析结果并缓存路由输出。
         """
         logger.info(f"开始智能路由: {query}")
         
         # 1. 分析查询特征
-        analysis = self.analyze_query(query)
+        analysis = analysis or self.analyze_query(query)
         
         # 2. 更新统计
         self._update_route_stats(analysis.recommended_strategy)
+        cache_key = make_cache_key("route_query", query, top_k, analysis.recommended_strategy.value)
+        cached_documents = self.route_cache.get(cache_key)
+        if cached_documents is not None:
+            logger.info("查询路由命中缓存")
+            return clone_documents(cached_documents), analysis
         
         # 3. 根据策略执行检索
         documents = []
@@ -205,25 +222,34 @@ class IntelligentQueryRouter:
             documents = self._post_process_results(documents, analysis)
             
             logger.info(f"路由完成，返回 {len(documents)} 个结果")
-            return documents, analysis
+            self.route_cache.set(cache_key, documents)
+            return clone_documents(documents), analysis
             
         except Exception as e:
             logger.error(f"查询路由失败: {e}")
             # 降级到传统检索
             documents = self.traditional_retrieval.hybrid_search(query, top_k)
-            return documents, analysis
+            documents = self._post_process_results(documents, analysis)
+            return clone_documents(documents), analysis
     
     def _combined_search(self, query: str, top_k: int) -> List[Document]:
         """
-        组合搜索策略：结合传统检索和图RAG的优势
+        组合搜索策略：结合传统检索和图RAG的优势；两路互不依赖时可并行。
         """
         # 分配结果数量
         traditional_k = max(1, top_k // 2)
         graph_k = top_k - traditional_k
         
         # 执行两种检索
-        traditional_docs = self.traditional_retrieval.hybrid_search(query, traditional_k)
-        graph_docs = self.graph_rag_retrieval.graph_rag_search(query, graph_k)
+        if getattr(self.config, "enable_parallel_retrieval", True):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                traditional_future = executor.submit(self.traditional_retrieval.hybrid_search, query, traditional_k)
+                graph_future = executor.submit(self.graph_rag_retrieval.graph_rag_search, query, graph_k)
+                traditional_docs = traditional_future.result()
+                graph_docs = graph_future.result()
+        else:
+            traditional_docs = self.traditional_retrieval.hybrid_search(query, traditional_k)
+            graph_docs = self.graph_rag_retrieval.graph_rag_search(query, graph_k)
         
         # 合并和去重
         combined_docs = []
@@ -290,9 +316,9 @@ class IntelligentQueryRouter:
             "combined_ratio": self.route_stats["combined_count"] / total
         }
     
-    def explain_routing_decision(self, query: str) -> str:
-        """解释路由决策过程"""
-        analysis = self.analyze_query(query)
+    def explain_routing_decision(self, query: str, analysis: Optional[QueryAnalysis] = None) -> str:
+        """解释路由决策过程；可接收已分析结果以避免重复调用LLM。"""
+        analysis = analysis or self.analyze_query(query)
         
         explanation = f"""
         查询路由分析报告
@@ -312,5 +338,3 @@ class IntelligentQueryRouter:
         """
         
         return explanation
-
- 
