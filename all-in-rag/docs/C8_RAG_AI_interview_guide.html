@@ -1,0 +1,1202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C8 食谱 RAG 系统 AI 开发岗位面试文档</title>
+  <style>
+@page {
+  size: A4;
+  margin: 18mm 16mm 18mm 16mm;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color: #172033;
+  background: #f4f6f8;
+  font-family: "Noto Sans SC", "Microsoft YaHei", "DengXian", "SimHei", sans-serif;
+  font-size: 15px;
+  line-height: 1.72;
+}
+
+body {
+  margin: 0;
+  padding: 28px;
+}
+
+.page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 44px 54px 58px;
+  background: white;
+  border: 1px solid #d8dee8;
+  box-shadow: 0 10px 34px rgba(20, 35, 65, 0.10);
+}
+
+h1, h2, h3, h4 {
+  color: #0f2747;
+  line-height: 1.34;
+  margin: 1.35em 0 0.55em;
+  font-weight: 750;
+}
+
+h1 {
+  margin-top: 0;
+  padding-bottom: 14px;
+  border-bottom: 3px solid #1f6fb2;
+  font-size: 31px;
+}
+
+h2 {
+  margin-top: 2em;
+  padding: 10px 0 8px;
+  border-bottom: 1px solid #dbe3ef;
+  font-size: 23px;
+  page-break-after: avoid;
+}
+
+h3 {
+  font-size: 18px;
+  page-break-after: avoid;
+}
+
+h4 {
+  font-size: 16px;
+}
+
+p {
+  margin: 0.58em 0;
+}
+
+ul, ol {
+  padding-left: 1.5em;
+  margin: 0.55em 0 0.85em;
+}
+
+li {
+  margin: 0.22em 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0 18px;
+  page-break-inside: avoid;
+  font-size: 14px;
+}
+
+th, td {
+  border: 1px solid #cfd8e5;
+  padding: 8px 10px;
+  vertical-align: top;
+}
+
+th {
+  background: #edf4fb;
+  color: #102a45;
+  font-weight: 700;
+}
+
+tr:nth-child(even) td {
+  background: #fafcff;
+}
+
+code {
+  font-family: Consolas, "Cascadia Mono", "Microsoft YaHei", monospace;
+  background: #eef3f8;
+  color: #0f3f6f;
+  padding: 0.1em 0.32em;
+  border-radius: 4px;
+  font-size: 0.92em;
+}
+
+pre {
+  margin: 13px 0 18px;
+  padding: 13px 15px;
+  border: 1px solid #cbd7e6;
+  border-left: 4px solid #1f6fb2;
+  background: #f7f9fc;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  page-break-inside: avoid;
+}
+
+pre code {
+  padding: 0;
+  background: transparent;
+  color: #152235;
+}
+
+blockquote {
+  margin: 14px 0;
+  padding: 10px 16px;
+  border-left: 4px solid #5792c8;
+  background: #f3f8fd;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid #d8e0ec;
+  margin: 26px 0;
+}
+
+strong {
+  color: #102a45;
+}
+
+.meta {
+  margin: -8px 0 24px;
+  padding: 13px 16px;
+  background: #f1f6fb;
+  border: 1px solid #d8e5f2;
+  color: #28435f;
+}
+
+@media print {
+  html, body {
+    background: white;
+  }
+  body {
+    padding: 0;
+  }
+  .page {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+  h2 {
+    break-after: avoid;
+  }
+  table, pre {
+    break-inside: avoid;
+  }
+}
+</style>
+</head>
+<body>
+  <main class="page">
+    <h1 id="c8-rag-ai">C8 食谱 RAG 系统 AI 开发岗位面试文档</h1>
+<p>项目名称：尝尝咸淡 RAG 系统<br>
+代码目录：<code>code/C8</code><br>
+文档用途：用于 AI 开发、LLM 应用开发、RAG 工程岗位面试准备<br>
+核心定位：基于本地食谱 Markdown 文档构建知识库，通过混合检索和大模型生成，为用户提供菜谱推荐、食材查询、制作步骤问答和多轮对话能力。</p>
+<h2 id="1">1. 项目总览</h2>
+<h3 id="11">1.1 项目解决的问题</h3>
+<p>这个项目不是一个普通聊天机器人，而是一个面向食谱领域的 RAG 应用。它要解决的问题是：用户用自然语言询问菜谱、食材、制作步骤或菜品推荐时，系统能够先从本地食谱知识库中检索相关内容，再把检索到的内容交给大语言模型生成回答。</p>
+<p>项目知识库来源于 <code>data/C8/cook</code> 下的 Markdown 食谱文档，当前约有 323 个 <code>.md</code> 文件。文档包含菜品名称、原料、步骤、难度、附加说明等内容，非常适合作为 RAG 的领域知识源。</p>
+<h3 id="12">1.2 核心能力</h3>
+<p>系统实现了以下功能：</p>
+<ol>
+<li>食谱文档加载与元数据抽取。</li>
+<li>Markdown 结构感知切分。</li>
+<li>父子文档映射。</li>
+<li>向量索引构建与持久化。</li>
+<li>本地知识库缓存与启动加速。</li>
+<li>文件变化检测与更新触发。</li>
+<li>向量检索和 BM25 关键词检索。</li>
+<li>RRF 融合重排。</li>
+<li>基于分类和难度的元数据过滤。</li>
+<li>查询路由，将问题分为列表、详情、通用三类。</li>
+<li>多轮对话历史缓存。</li>
+<li>上下文查询改写，解决“这个怎么做”等省略主语问题。</li>
+<li>DeepSeek 大模型回答生成。</li>
+<li>非流式和流式回答输出。</li>
+<li>Chainlit Web 聊天界面。</li>
+<li>UI 中展示分析、检索、生成等处理步骤。</li>
+</ol>
+<h3 id="13">1.3 技术栈</h3>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>技术</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>应用框架</td>
+<td>Python</td>
+<td>后端主语言</td>
+</tr>
+<tr>
+<td>RAG 编排</td>
+<td>LangChain</td>
+<td>Document、Prompt、Chain、Retriever 等组件</td>
+</tr>
+<tr>
+<td>文档切分</td>
+<td>MarkdownHeaderTextSplitter</td>
+<td>按 Markdown 标题结构切分</td>
+</tr>
+<tr>
+<td>Embedding</td>
+<td>BAAI/bge-small-zh-v1.5</td>
+<td>中文语义向量化</td>
+</tr>
+<tr>
+<td>向量库</td>
+<td>FAISS</td>
+<td>本地向量索引与相似度检索</td>
+</tr>
+<tr>
+<td>关键词检索</td>
+<td>BM25Retriever</td>
+<td>关键词召回</td>
+</tr>
+<tr>
+<td>重排</td>
+<td>RRF</td>
+<td>融合向量检索与 BM25 检索</td>
+</tr>
+<tr>
+<td>LLM</td>
+<td>DeepSeek Chat</td>
+<td>回答生成、查询路由、查询改写</td>
+</tr>
+<tr>
+<td>Web UI</td>
+<td>Chainlit</td>
+<td>聊天界面、流式输出、步骤展示</td>
+</tr>
+<tr>
+<td>配置</td>
+<td>dataclass + dotenv</td>
+<td>集中管理参数与 API Key</td>
+</tr>
+</tbody>
+</table>
+<h3 id="14">1.4 一句话面试介绍</h3>
+<p>可以这样介绍：</p>
+<p>“这个项目是一个面向食谱场景的 RAG 问答系统。我把本地 Markdown 食谱解析成 LangChain Document，按 Markdown 标题做结构化切分，然后用 bge-small-zh-v1.5 生成向量并存入 FAISS。同时为了弥补纯向量检索对菜名、食材关键词匹配不稳定的问题，我加入了 BM25，并用 RRF 做结果融合。查询进入系统后会先经过 LLM 路由和上下文改写，再根据分类、难度等元数据做过滤，最后把召回到的父文档拼成上下文交给 DeepSeek 生成回答。前端用 Chainlit 实现聊天界面、流式输出和检索过程展示。”</p>
+<h2 id="2">2. 代码结构</h2>
+<p>项目主要文件如下：</p>
+<pre><code class="language-text">code/C8
+  config.py
+  main.py
+  web_ui_recipe.py
+  chainlit.md
+  requirements.txt
+  rag_modules
+    __init__.py
+    data_preparation.py
+    index_construction.py
+    retrieval_optimization.py
+    generation_integration.py
+  vector_index
+</code></pre>
+<p>各文件职责：</p>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>主要职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config.py</code></td>
+<td>定义 RAGConfig，集中管理路径、模型、检索和生成参数</td>
+</tr>
+<tr>
+<td><code>main.py</code></td>
+<td>系统主入口，串联数据、索引、检索、生成模块</td>
+</tr>
+<tr>
+<td><code>web_ui_recipe.py</code></td>
+<td>Chainlit Web UI 入口，处理用户会话和消息</td>
+</tr>
+<tr>
+<td><code>data_preparation.py</code></td>
+<td>加载 Markdown，增强元数据，结构化切分，缓存文档状态</td>
+</tr>
+<tr>
+<td><code>index_construction.py</code></td>
+<td>初始化 Embedding，构建、保存、加载 FAISS 向量索引</td>
+</tr>
+<tr>
+<td><code>retrieval_optimization.py</code></td>
+<td>建立向量检索器和 BM25 检索器，执行混合检索和 RRF 重排</td>
+</tr>
+<tr>
+<td><code>generation_integration.py</code></td>
+<td>初始化 DeepSeek，完成查询路由、查询改写、Prompt 生成和流式输出</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3">3. 整体架构与调用链路</h2>
+<h3 id="31">3.1 模块分层</h3>
+<p>系统按职责拆成五个核心模块：</p>
+<ol>
+<li>配置层：<code>RAGConfig</code></li>
+<li>数据准备层：<code>DataPreparationModule</code></li>
+<li>索引构建层：<code>IndexConstructionModule</code></li>
+<li>检索优化层：<code>RetrievalOptimizationModule</code></li>
+<li>生成集成层：<code>GenerationIntegrationModule</code></li>
+</ol>
+<p>外层由 <code>RecipeRAGSystem</code> 统一编排。Web 界面由 <code>web_ui_recipe.py</code> 调用 <code>RecipeRAGSystem</code>。</p>
+<h3 id="32">3.2 启动流程</h3>
+<p>启动时调用链路如下：</p>
+<pre><code class="language-text">RecipeRAGSystem()
+  -&gt; 检查 data_path 是否存在
+  -&gt; 检查 DEEPSEEK_API_KEY
+  -&gt; initialize_system()
+       -&gt; 创建 DataPreparationModule
+       -&gt; 创建 IndexConstructionModule
+            -&gt; 初始化 HuggingFaceEmbeddings
+       -&gt; 创建 GenerationIntegrationModule
+            -&gt; 初始化 DeepSeek ChatOpenAI
+  -&gt; build_knowledge_base()
+       -&gt; 尝试加载 FAISS 索引
+       -&gt; 尝试加载文档缓存
+       -&gt; 检查文件是否新增或修改
+       -&gt; 命中缓存则复用
+       -&gt; 否则加载文档、切分、建索引、保存缓存
+       -&gt; 初始化 RetrievalOptimizationModule
+</code></pre>
+<h3 id="33">3.3 一次问答流程</h3>
+<p>用户提问后，<code>ask_question()</code> 中的主链路如下：</p>
+<pre><code class="language-text">用户问题
+  -&gt; query_router 判断问题类型
+  -&gt; query_rewrite 根据历史对话重写查询
+  -&gt; _extract_filters_from_query 提取分类/难度过滤条件
+  -&gt; hybrid_search 或 metadata_filtered_search
+  -&gt; get_parent_documents 由子块找到完整食谱
+  -&gt; 根据 route_type 选择回答方式
+       list: 直接返回菜名列表
+       detail: 生成分步骤回答
+       general: 生成基础回答
+  -&gt; 返回普通字符串或流式生成器
+</code></pre>
+<p>面试时可以强调：这个链路把“检索准确性”和“生成质量”拆开处理。检索阶段尽量找到正确菜谱，生成阶段只基于召回内容组织答案，从而降低模型幻觉。</p>
+<h2 id="4">4. 配置管理实现</h2>
+<p>配置文件是 <code>config.py</code>。</p>
+<p><code>RAGConfig</code> 是一个 dataclass，包含：</p>
+<pre><code class="language-python">data_path: str = &quot;../../data/C8/cook&quot;
+index_save_path: str = &quot;./vector_index&quot;
+embedding_model: str = &quot;BAAI/bge-small-zh-v1.5&quot;
+llm_model: str = &quot;deepseek-chat&quot;
+top_k: int = 3
+temperature: float = 0.1
+max_tokens: int = 2048
+</code></pre>
+<h3 id="41">4.1 为什么这样设计</h3>
+<p>把路径、模型、检索数量和生成参数集中在配置类里，有几个好处：</p>
+<ol>
+<li>便于替换模型，比如从 <code>deepseek-chat</code> 换成其他 OpenAI 兼容模型。</li>
+<li>便于调参，比如修改 <code>top_k</code>、<code>temperature</code>、<code>max_tokens</code>。</li>
+<li>主流程代码不用写死参数，模块之间更解耦。</li>
+<li>后续可以很容易扩展为从 YAML、JSON 或环境变量加载配置。</li>
+</ol>
+<h3 id="42-api-key">4.2 API Key 校验</h3>
+<p>在 <code>RecipeRAGSystem.__init__()</code> 中，系统会检查：</p>
+<pre><code class="language-python">if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+    raise ValueError(&quot;请设置 DEEPSEEK_API_KEY 环境变量&quot;)
+</code></pre>
+<p>这能在系统初始化阶段尽早暴露配置问题，避免用户真正提问时才发现模型无法调用。</p>
+<p>面试回答要点：</p>
+<p>“我把模型密钥放在环境变量里，不写入代码。启动阶段会做显式校验，这是一种基本的工程防御。后续如果生产化，可以把密钥接入 Secret Manager 或部署平台环境变量。”</p>
+<h2 id="5">5. 数据准备模块</h2>
+<p>对应代码：<code>rag_modules/data_preparation.py</code></p>
+<p>数据准备模块负责把原始 Markdown 食谱转成可检索的 LangChain <code>Document</code>，并补充元数据。</p>
+<h3 id="51">5.1 文档加载</h3>
+<p><code>load_documents()</code> 会递归读取 <code>data_path</code> 下所有 <code>.md</code> 文件：</p>
+<pre><code class="language-python">for md_file in data_path_obj.rglob(&quot;*.md&quot;):
+    with open(md_file, &quot;r&quot;, encoding=&quot;utf-8&quot;) as f:
+        content = f.read()
+</code></pre>
+<p>每个 Markdown 文件会被包装成一个 LangChain <code>Document</code>：</p>
+<pre><code class="language-python">Document(
+    page_content=content,
+    metadata={
+        &quot;source&quot;: str(md_file),
+        &quot;parent_id&quot;: parent_id,
+        &quot;doc_type&quot;: &quot;parent&quot;
+    }
+)
+</code></pre>
+<p>这里的完整 Markdown 文件被称为父文档。父文档代表一道完整菜谱。</p>
+<h3 id="52-parent_id">5.2 parent_id 的生成</h3>
+<p>代码用文档相对路径生成稳定 ID：</p>
+<pre><code class="language-python">relative_path = Path(md_file).resolve().relative_to(data_root).as_posix()
+parent_id = hashlib.md5(relative_path.encode(&quot;utf-8&quot;)).hexdigest()
+</code></pre>
+<p>这样做的意义是：</p>
+<ol>
+<li>同一个文件每次加载得到相同的 <code>parent_id</code>。</li>
+<li>能把切分后的多个子块关联回完整食谱。</li>
+<li>后续做缓存、去重、更新时有稳定标识。</li>
+</ol>
+<p>面试时可以说：</p>
+<p>“我没有用随机 UUID 作为父文档 ID，而是用相对路径做 MD5。这样父文档 ID 是确定性的，重启后仍然一致，方便父子文档映射和缓存恢复。”</p>
+<h3 id="53">5.3 元数据增强</h3>
+<p><code>_enhance_metadata()</code> 会给每个文档补充三个关键字段：</p>
+<ol>
+<li><code>category</code>：菜品分类。</li>
+<li><code>dish_name</code>：菜品名称。</li>
+<li><code>difficulty</code>：难度等级。</li>
+</ol>
+<p>分类来自路径目录，例如：</p>
+<table>
+<thead>
+<tr>
+<th>路径目录</th>
+<th>中文分类</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>meat_dish</code></td>
+<td>荤菜</td>
+</tr>
+<tr>
+<td><code>vegetable_dish</code></td>
+<td>素菜</td>
+</tr>
+<tr>
+<td><code>soup</code></td>
+<td>汤品</td>
+</tr>
+<tr>
+<td><code>dessert</code></td>
+<td>甜品</td>
+</tr>
+<tr>
+<td><code>breakfast</code></td>
+<td>早餐</td>
+</tr>
+<tr>
+<td><code>staple</code></td>
+<td>主食</td>
+</tr>
+<tr>
+<td><code>aquatic</code></td>
+<td>水产</td>
+</tr>
+<tr>
+<td><code>condiment</code></td>
+<td>调料</td>
+</tr>
+<tr>
+<td><code>drink</code></td>
+<td>饮品</td>
+</tr>
+</tbody>
+</table>
+<p>菜品名称来自文件名：</p>
+<pre><code class="language-python">doc.metadata[&quot;dish_name&quot;] = file_path.stem
+</code></pre>
+<p>难度来自文档中的星级符号：</p>
+<pre><code class="language-python">if &quot;★★★★★&quot; in content:
+    difficulty = &quot;非常困难&quot;
+elif &quot;★★★★&quot; in content:
+    difficulty = &quot;困难&quot;
+elif &quot;★★★&quot; in content:
+    difficulty = &quot;中等&quot;
+elif &quot;★★&quot; in content:
+    difficulty = &quot;简单&quot;
+elif &quot;★&quot; in content:
+    difficulty = &quot;非常简单&quot;
+else:
+    difficulty = &quot;未知&quot;
+</code></pre>
+<h3 id="54">5.4 为什么元数据重要</h3>
+<p>元数据不是给 LLM 看的装饰信息，而是检索阶段的重要控制信号。</p>
+<p>例如用户问：</p>
+<p>“推荐几个简单的素菜”</p>
+<p>系统可以从问题中抽取：</p>
+<pre><code class="language-python">{&quot;category&quot;: &quot;素菜&quot;, &quot;difficulty&quot;: &quot;简单&quot;}
+</code></pre>
+<p>然后只在满足条件的候选文档中选结果。这样比只靠向量相似度更精确。</p>
+<p>面试回答要点：</p>
+<p>“RAG 不只是把文本丢进向量库。结构化元数据可以把自然语言查询转成过滤条件，尤其适合分类、难度、地区、时间、标签这类字段。它能减少无关召回，提高答案可控性。”</p>
+<h2 id="6-markdown">6. Markdown 结构感知分块</h2>
+<p>对应函数：<code>chunk_documents()</code> 和 <code>_markdown_header_split()</code></p>
+<h3 id="61">6.1 为什么不直接固定长度切分</h3>
+<p>食谱文档通常天然有结构，例如：</p>
+<pre><code class="language-text"># 宫保鸡丁
+## 必备原料和工具
+## 计算
+## 操作
+## 附加内容
+</code></pre>
+<p>如果按固定 token 或固定字符长度切分，可能会把“原料”和“步骤”切在一起，也可能把一个步骤截断。这样检索到的片段上下文不完整。</p>
+<p>所以系统使用 LangChain 的 <code>MarkdownHeaderTextSplitter</code>，按 Markdown 标题结构切分。</p>
+<h3 id="62">6.2 切分配置</h3>
+<p>代码定义了三个标题层级：</p>
+<pre><code class="language-python">headers_to_split_on = [
+    (&quot;#&quot;, &quot;主标题&quot;),
+    (&quot;##&quot;, &quot;二级标题&quot;),
+    (&quot;###&quot;, &quot;三级标题&quot;)
+]
+</code></pre>
+<p>并设置：</p>
+<pre><code class="language-python">strip_headers=False
+</code></pre>
+<p>这表示切分后保留标题。保留标题有助于模型理解这个片段属于“原料”“操作”还是“附加内容”。</p>
+<h3 id="63">6.3 子块元数据</h3>
+<p>每个 chunk 都会带上：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunk_id</code></td>
+<td>子块唯一 ID</td>
+</tr>
+<tr>
+<td><code>parent_id</code></td>
+<td>对应父文档 ID</td>
+</tr>
+<tr>
+<td><code>doc_type</code></td>
+<td>标记为 <code>child</code></td>
+</tr>
+<tr>
+<td><code>chunk_index</code></td>
+<td>在父文档中的位置</td>
+</tr>
+<tr>
+<td><code>batch_index</code></td>
+<td>在当前批次中的位置</td>
+</tr>
+<tr>
+<td><code>chunk_size</code></td>
+<td>子块长度</td>
+</tr>
+</tbody>
+</table>
+<h3 id="64">6.4 父子文档设计</h3>
+<p>系统检索时检索的是子块，但生成回答时使用完整父文档。</p>
+<p>原因是：</p>
+<ol>
+<li>子块更短，适合向量检索，召回更精准。</li>
+<li>完整父文档信息更全，适合生成完整做法。</li>
+<li>检索和生成使用不同粒度，可以兼顾精度和上下文完整性。</li>
+</ol>
+<p><code>get_parent_documents()</code> 会根据检索到的子块找到父文档，并按父文档被命中的次数排序。</p>
+<p>面试回答话术：</p>
+<p>“我采用了 parent-child retrieval 思路。检索阶段用 chunk 提高召回精度，生成阶段回到 parent 文档，避免模型只看到一个局部片段导致回答不完整。比如用户问一道菜怎么做，检索可能命中操作片段，但回答还需要原料、工具和注意事项，所以要回到完整食谱。”</p>
+<h2 id="7">7. 缓存、持久化与更新机制</h2>
+<h3 id="71">7.1 文档状态缓存</h3>
+<p>数据准备模块会把解析后的状态保存到：</p>
+<pre><code class="language-text">data/C8/knowledge_cache.pkl
+</code></pre>
+<p>缓存内容包括：</p>
+<pre><code class="language-python">{
+    &quot;documents&quot;: self.documents,
+    &quot;chunks&quot;: self.chunks,
+    &quot;parent_child_map&quot;: self.parent_child_map,
+    &quot;file_hashes&quot;: self.file_hashes
+}
+</code></pre>
+<p>这能避免每次启动都重新读取和切分 Markdown。</p>
+<h3 id="72">7.2 向量索引持久化</h3>
+<p>索引模块会把 FAISS 保存到：</p>
+<pre><code class="language-text">code/C8/vector_index
+</code></pre>
+<p>使用的是：</p>
+<pre><code class="language-python">self.vectorstore.save_local(self.index_save_path)
+</code></pre>
+<p>加载时使用：</p>
+<pre><code class="language-python">FAISS.load_local(
+    self.index_save_path,
+    self.embeddings,
+    allow_dangerous_deserialization=True
+)
+</code></pre>
+<h3 id="73">7.3 启动时的三种情况</h3>
+<p><code>build_knowledge_base()</code> 会同时尝试加载 FAISS 索引和文档缓存。</p>
+<p>第一种情况：索引存在，缓存存在，文件无变化。</p>
+<p>系统直接复用缓存和索引，实现快速启动。</p>
+<p>第二种情况：索引存在，缓存存在，但发现文件新增或修改。</p>
+<p>系统重新加载文档、重新切分、重新构建索引，并保存缓存。</p>
+<p>第三种情况：索引或缓存缺失。</p>
+<p>系统走全量构建流程：加载文档 -&gt; 切分 -&gt; 构建索引 -&gt; 保存索引 -&gt; 保存缓存。</p>
+<h3 id="74">7.4 文件变化检测</h3>
+<p><code>check_for_updates()</code> 会遍历所有 Markdown 文件，并记录文件最后修改时间：</p>
+<pre><code class="language-python">current_mtime = str(os.path.getmtime(md_file))
+</code></pre>
+<p>如果文件路径不存在于 <code>file_hashes</code> 中，或者修改时间变了，就认为文件有更新。</p>
+<h3 id="75">7.5 面试中的诚实说明</h3>
+<p>需要注意：当前代码的“增量更新”更准确地说是“变更检测后触发重建”。它能检测哪些文件发生变化，但发生变化后当前实现会重新加载所有文档并重建完整索引，而不是只对变更文件做真正的 add/update/delete。</p>
+<p>面试时可以这样说：</p>
+<p>“这个版本已经实现了文件变化检测和缓存复用。严格来说，当前增量更新还不是完全的局部更新，因为 FAISS 对删除和更新的管理比较麻烦，所以发现变化后先重建索引，保证正确性。下一步我会把文档 ID 和向量 ID 建立映射，对新增文档调用 add_documents，对修改文档先删除旧向量再插入新向量，或者切换到更适合增删改的向量数据库，比如 Milvus、Qdrant 或 Chroma。”</p>
+<h2 id="8">8. 向量索引构建</h2>
+<p>对应代码：<code>rag_modules/index_construction.py</code></p>
+<h3 id="81-embedding">8.1 Embedding 模型</h3>
+<p>系统使用：</p>
+<pre><code class="language-python">BAAI/bge-small-zh-v1.5
+</code></pre>
+<p>这是一个中文语义表示模型，适合中文问题和中文文档的相似度检索。</p>
+<p>初始化方式：</p>
+<pre><code class="language-python">HuggingFaceEmbeddings(
+    model_name=self.model_name,
+    model_kwargs={&quot;device&quot;: &quot;cpu&quot;},
+    encode_kwargs={&quot;normalize_embeddings&quot;: True}
+)
+</code></pre>
+<h3 id="82-normalize_embeddings">8.2 为什么 normalize_embeddings</h3>
+<p><code>normalize_embeddings=True</code> 会把向量归一化。归一化后，向量相似度计算更接近余弦相似度，能减少向量长度差异带来的影响。</p>
+<p>面试回答：</p>
+<p>“对于语义检索，通常更关注方向相似度而不是向量长度。归一化可以让相似度计算更稳定，尤其是不同长度文本的 embedding 之间进行比较时。”</p>
+<h3 id="83-faiss">8.3 FAISS 索引构建</h3>
+<p>构建索引的核心代码：</p>
+<pre><code class="language-python">self.vectorstore = FAISS.from_documents(
+    documents=chunks,
+    embedding=self.embeddings
+)
+</code></pre>
+<p>LangChain 会对每个 chunk 调用 embedding 模型，得到向量后写入 FAISS。</p>
+<h3 id="84">8.4 保存与加载</h3>
+<p>保存：</p>
+<pre><code class="language-python">self.vectorstore.save_local(self.index_save_path)
+</code></pre>
+<p>加载：</p>
+<pre><code class="language-python">self.vectorstore = FAISS.load_local(...)
+</code></pre>
+<p>这样系统不需要每次启动都重新 embedding 323 篇文档。</p>
+<h3 id="85-faiss">8.5 为什么选择 FAISS</h3>
+<p>FAISS 的优点：</p>
+<ol>
+<li>本地部署简单，不需要额外服务。</li>
+<li>对中小规模知识库检索速度快。</li>
+<li>和 LangChain 集成方便。</li>
+<li>适合教学项目、原型验证、本地 Demo。</li>
+</ol>
+<p>局限：</p>
+<ol>
+<li>多用户生产部署能力不如专用向量数据库。</li>
+<li>元数据过滤能力较弱，需要应用层处理。</li>
+<li>增删改和索引版本管理没有 Milvus、Qdrant 等数据库完善。</li>
+</ol>
+<h2 id="9-rrf">9. 混合检索与 RRF 重排</h2>
+<p>对应代码：<code>rag_modules/retrieval_optimization.py</code></p>
+<h3 id="91">9.1 为什么需要混合检索</h3>
+<p>纯向量检索适合理解语义，比如：</p>
+<p>“这个菜怎么做”</p>
+<p>“有没有容易上手的晚餐”</p>
+<p>但它对具体词匹配不一定稳定。例如菜名、食材名、调料名可能需要精确匹配：</p>
+<p>“鱼香肉丝”</p>
+<p>“不放酱油”</p>
+<p>“土豆”</p>
+<p>BM25 正好擅长关键词匹配。因此系统把向量检索和 BM25 结合起来。</p>
+<h3 id="92">9.2 两路召回</h3>
+<p>向量检索器：</p>
+<pre><code class="language-python">self.vector_retriever = self.vectorstore.as_retriever(
+    search_type=&quot;similarity&quot;,
+    search_kwargs={&quot;k&quot;: 5}
+)
+</code></pre>
+<p>BM25 检索器：</p>
+<pre><code class="language-python">self.bm25_retriever = BM25Retriever.from_documents(
+    self.chunks,
+    k=5
+)
+</code></pre>
+<p>查询时分别调用：</p>
+<pre><code class="language-python">vector_docs = self.vector_retriever.invoke(query)
+bm25_docs = self.bm25_retriever.invoke(query)
+</code></pre>
+<h3 id="93-rrf">9.3 RRF 重排</h3>
+<p>系统使用 RRF，也就是 Reciprocal Rank Fusion，把两路结果融合。</p>
+<p>分数公式：</p>
+<pre><code class="language-text">score = 1 / (k + rank + 1)
+</code></pre>
+<p>如果同一个文档同时被向量检索和 BM25 检索命中，它的分数会累加，因此排序会更靠前。</p>
+<p>代码中默认 <code>k=60</code>，用于平滑排名差异。</p>
+<h3 id="94-rrf">9.4 RRF 的优点</h3>
+<ol>
+<li>不要求不同检索器分数在同一个尺度上。</li>
+<li>只依赖排名，不依赖原始相似度分数。</li>
+<li>实现简单，效果稳定。</li>
+<li>特别适合把语义召回和关键词召回融合。</li>
+</ol>
+<p>面试回答话术：</p>
+<p>“向量检索和 BM25 的分数不可直接比较，一个是语义相似度，一个是词频相关性。所以我没有直接加权原始分数，而是用 RRF 基于排名融合。这样只要文档在多个召回器里排名都靠前，就会获得更高最终分数。”</p>
+<h2 id="10">10. 元数据过滤检索</h2>
+<h3 id="101">10.1 过滤条件抽取</h3>
+<p>在 <code>main.py</code> 的 <code>_extract_filters_from_query()</code> 中，系统会检查用户问题是否包含分类或难度关键词。</p>
+<p>分类关键词来自：</p>
+<pre><code class="language-python">DataPreparationModule.get_supported_categories()
+</code></pre>
+<p>难度关键词来自：</p>
+<pre><code class="language-python">DataPreparationModule.get_supported_difficulties()
+</code></pre>
+<p>如果用户问题里出现“素菜”“简单”等词，就生成过滤条件：</p>
+<pre><code class="language-python">{&quot;category&quot;: &quot;素菜&quot;, &quot;difficulty&quot;: &quot;简单&quot;}
+</code></pre>
+<h3 id="102">10.2 过滤执行方式</h3>
+<p><code>metadata_filtered_search()</code> 先扩大召回：</p>
+<pre><code class="language-python">docs = self.hybrid_search(query, top_k * 3)
+</code></pre>
+<p>然后在候选结果中逐个检查 metadata 是否匹配。</p>
+<p>这样做的原因是：如果一开始只召回 <code>top_k=3</code>，可能过滤完就没有结果。先召回更多候选，再过滤，更容易得到满足条件的文档。</p>
+<h3 id="103">10.3 典型例子</h3>
+<p>用户问：</p>
+<p>“推荐几个简单的素菜”</p>
+<p>系统流程：</p>
+<ol>
+<li>路由判断为 <code>list</code>。</li>
+<li>查询不做改写。</li>
+<li>抽取过滤条件：<code>category=素菜</code>，<code>difficulty=简单</code>。</li>
+<li>混合检索召回更多候选。</li>
+<li>只保留元数据匹配的文档。</li>
+<li>找到父文档。</li>
+<li>返回菜名列表。</li>
+</ol>
+<p>面试回答要点：</p>
+<p>“元数据过滤让检索从纯相似度排序变成了条件约束下的排序。对于推荐类需求，这比完全依赖大模型判断更可靠，也更可解释。”</p>
+<h2 id="11_1">11. 查询路由</h2>
+<p>对应代码：<code>GenerationIntegrationModule.query_router()</code></p>
+<h3 id="111">11.1 路由类型</h3>
+<p>系统将问题分为三类：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>含义</th>
+<th>示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list</code></td>
+<td>用户想要菜品列表或推荐</td>
+<td>推荐几个素菜、有什么川菜</td>
+</tr>
+<tr>
+<td><code>detail</code></td>
+<td>用户想要具体制作方法</td>
+<td>宫保鸡丁怎么做、需要什么食材</td>
+</tr>
+<tr>
+<td><code>general</code></td>
+<td>一般知识或技巧问题</td>
+<td>什么是川菜、如何炒菜不粘锅</td>
+</tr>
+</tbody>
+</table>
+<h3 id="112">11.2 实现方式</h3>
+<p>系统通过 Prompt 让 LLM 分类：</p>
+<pre><code class="language-text">根据用户的问题，将其分类为 list、detail 或 general。
+请只返回分类结果。
+</code></pre>
+<p>如果模型返回的不是合法类别，代码默认回退到 <code>general</code>：</p>
+<pre><code class="language-python">if result in [&quot;list&quot;, &quot;detail&quot;, &quot;general&quot;]:
+    return result
+else:
+    return &quot;general&quot;
+</code></pre>
+<h3 id="113">11.3 路由结果如何影响后续流程</h3>
+<p>不同路由走不同回答策略：</p>
+<ol>
+<li><code>list</code>：直接从父文档中提取菜品名称，返回列表，不调用 LLM 生成长文。</li>
+<li><code>detail</code>：调用分步骤 Prompt，生成菜品介绍、食材、步骤、技巧。</li>
+<li><code>general</code>：调用基础问答 Prompt，生成普通解释类回答。</li>
+</ol>
+<h3 id="114">11.4 面试可讲点</h3>
+<p>“查询路由能避免所有问题都走同一个 Prompt。比如推荐菜名时没必要让大模型长篇生成，直接返回检索到的菜名更快、更稳定；制作步骤问题则需要更结构化的 Prompt。路由让系统在成本、速度和回答质量之间做动态选择。”</p>
+<h2 id="12_1">12. 多轮对话与查询改写</h2>
+<p>对应代码：<code>GenerationIntegrationModule.query_rewrite()</code></p>
+<h3 id="121">12.1 为什么需要查询改写</h3>
+<p>多轮对话中，用户经常省略主语。例如：</p>
+<pre><code class="language-text">用户：红烧肉是什么菜？
+助手：红烧肉是一道经典家常菜...
+用户：那具体怎么做？
+</code></pre>
+<p>第二个问题“那具体怎么做”本身没有菜名。如果直接检索，很可能召回错误菜谱。</p>
+<h3 id="122">12.2 历史记录窗口</h3>
+<p>系统会传入 <code>chat_history</code>，并只取最近 6 条消息，也就是最近 3 轮对话：</p>
+<pre><code class="language-python">recent_history = chat_history[-6:]
+</code></pre>
+<p>这样既能保留上下文，又能避免 Prompt 过长。</p>
+<h3 id="123-prompt">12.3 改写 Prompt 的目标</h3>
+<p>Prompt 要求模型：</p>
+<ol>
+<li>如果问题包含“它”“这个”等代词，要参考历史记录补全菜品名。</li>
+<li>如果问题过于宽泛，可以重写成更适合检索的查询。</li>
+<li>如果问题已经明确，就返回原查询。</li>
+</ol>
+<p>例如：</p>
+<pre><code class="language-text">“具体怎么做” -&gt; “红烧肉具体怎么做”
+“有饮品推荐吗” -&gt; “简单饮品制作方法”
+“宫保鸡丁怎么做” -&gt; “宫保鸡丁怎么做”
+</code></pre>
+<h3 id="124">12.4 面试回答话术</h3>
+<p>“RAG 的检索质量很依赖 query。如果用户的 query 缺少实体，比如‘这个怎么做’，向量检索会失去目标。所以我在检索前加了 query rewrite，把用户当前问题和短期历史一起交给 LLM，让它补全省略的主语。这一步属于检索前优化，可以显著提升多轮问答的召回准确率。”</p>
+<h2 id="13_1">13. 父文档召回与去重排序</h2>
+<p>对应代码：<code>DataPreparationModule.get_parent_documents()</code></p>
+<h3 id="131">13.1 实现逻辑</h3>
+<p>检索模块返回的是子块列表。生成回答前，系统会根据每个子块的 <code>parent_id</code> 找到对应完整食谱。</p>
+<p>核心逻辑：</p>
+<ol>
+<li>遍历检索到的 child chunks。</li>
+<li>读取每个 chunk 的 <code>parent_id</code>。</li>
+<li>统计每个 parent 被命中的次数。</li>
+<li>根据 <code>parent_id</code> 在 <code>self.documents</code> 中找到父文档。</li>
+<li>按命中次数排序。</li>
+<li>返回去重后的父文档列表。</li>
+</ol>
+<h3 id="132">13.2 为什么按命中次数排序</h3>
+<p>如果一道菜的多个章节都被检索命中，说明这道菜和用户问题更相关。因此父文档命中次数可以作为一个简单的相关性信号。</p>
+<p>例如用户问：</p>
+<p>“鱼香肉丝需要什么食材，具体怎么做？”</p>
+<p>如果同一道菜的“原料”和“操作”两个 chunk 都被命中，它比只命中一个片段的文档更值得排在前面。</p>
+<h3 id="133">13.3 面试可讲点</h3>
+<p>“父子映射不仅用于找回完整上下文，也用于去重。否则多个 chunk 来自同一道菜，直接把它们全部交给 LLM 会造成重复上下文。通过 parent_id 去重后，Prompt 更紧凑，信息也更完整。”</p>
+<h2 id="14_1">14. 回答生成模块</h2>
+<p>对应代码：<code>rag_modules/generation_integration.py</code></p>
+<h3 id="141-llm">14.1 LLM 初始化</h3>
+<p>系统用 <code>langchain_openai.ChatOpenAI</code> 调 DeepSeek：</p>
+<pre><code class="language-python">self.llm = ChatOpenAI(
+    model=self.model_name,
+    temperature=self.temperature,
+    max_tokens=self.max_tokens,
+    api_key=api_key,
+    base_url=&quot;https://api.deepseek.com&quot;,
+)
+</code></pre>
+<p>虽然类名是 <code>ChatOpenAI</code>，但由于 DeepSeek 提供 OpenAI 兼容接口，所以可以通过 <code>base_url</code> 接入。</p>
+<h3 id="142">14.2 基础回答</h3>
+<p><code>generate_basic_answer()</code> 用于通用问题。Prompt 要求模型：</p>
+<ol>
+<li>扮演专业烹饪助手。</li>
+<li>根据食谱信息回答。</li>
+<li>如果信息不足，要诚实说明。</li>
+</ol>
+<p>这类回答适合：</p>
+<pre><code class="language-text">鱼香肉丝需要什么材料？
+什么是川菜？
+糖醋汁怎么调？
+</code></pre>
+<h3 id="143">14.3 分步骤回答</h3>
+<p><code>generate_step_by_step_answer()</code> 用于具体做法问题。Prompt 引导模型输出：</p>
+<ol>
+<li>菜品介绍。</li>
+<li>所需食材。</li>
+<li>制作步骤。</li>
+<li>制作技巧。</li>
+</ol>
+<p>同时要求：</p>
+<ol>
+<li>根据实际内容灵活调整结构。</li>
+<li>不要强行填充无关内容。</li>
+<li>不要重复制作步骤里的信息。</li>
+<li>如果没有额外技巧，可以省略技巧部分。</li>
+</ol>
+<h3 id="144">14.4 列表回答</h3>
+<p><code>generate_list_answer()</code> 不调用 LLM，而是直接从 <code>context_docs</code> 的 metadata 中提取 <code>dish_name</code>。</p>
+<p>这样做有几个优点：</p>
+<ol>
+<li>速度快。</li>
+<li>成本低。</li>
+<li>不容易编造菜名。</li>
+<li>推荐结果都来自知识库。</li>
+</ol>
+<h3 id="145">14.5 上下文构造</h3>
+<p><code>_build_context()</code> 会把父文档转成 Prompt 中的上下文，格式类似：</p>
+<pre><code class="language-text">【食谱 1】 宫保鸡丁 | 分类: 荤菜 | 难度: 中等
+文档内容...
+</code></pre>
+<p>并限制总长度：</p>
+<pre><code class="language-python">max_length = 2000
+</code></pre>
+<p>如果超过长度就停止追加，避免 Prompt 太长。</p>
+<h3 id="146">14.6 面试可讲点</h3>
+<p>“我在生成阶段把元数据也放进上下文，例如菜名、分类、难度。这样模型不仅看到正文，还知道这份文档在领域里的结构属性。对于回答推荐理由、难度判断、分类问题很有帮助。”</p>
+<h2 id="15">15. 流式输出</h2>
+<h3 id="151">15.1 后端流式生成</h3>
+<p>生成模块提供两个流式函数：</p>
+<pre><code class="language-python">generate_basic_answer_stream()
+generate_step_by_step_answer_stream()
+</code></pre>
+<p>它们使用 LangChain 的：</p>
+<pre><code class="language-python">chain.stream(...)
+</code></pre>
+<p>每次产出一个文本片段：</p>
+<pre><code class="language-python">for chunk in chain.stream(...):
+    yield chunk
+</code></pre>
+<h3 id="152-chainlit">15.2 Chainlit 前端流式展示</h3>
+<p>在 <code>web_ui_recipe.py</code> 中，系统先创建空消息：</p>
+<pre><code class="language-python">response_msg = cl.Message(content=&quot;&quot;)
+await response_msg.send()
+</code></pre>
+<p>然后逐块写入：</p>
+<pre><code class="language-python">for chunk in generator:
+    full_response += chunk
+    await response_msg.stream_token(chunk)
+</code></pre>
+<p>这会形成打字机效果，用户不用等完整回答生成完才看到内容。</p>
+<h3 id="153">15.3 面试可讲点</h3>
+<p>“流式输出本身不提升模型质量，但能显著提升用户体验。特别是 RAG 回答通常较长，用户看到系统持续输出，会感知到系统在工作，而不是卡住。”</p>
+<h2 id="16-chainlit-web-ui">16. Chainlit Web UI</h2>
+<p>对应代码：<code>web_ui_recipe.py</code></p>
+<h3 id="161">16.1 全局知识库单例</h3>
+<p>代码定义：</p>
+<pre><code class="language-python">global_rag_system = None
+</code></pre>
+<p>第一次用户打开页面时才初始化：</p>
+<pre><code class="language-python">if global_rag_system is None:
+    global_rag_system = await asyncio.to_thread(init_system)
+</code></pre>
+<p>后续用户或刷新页面复用同一个知识库实例。</p>
+<h3 id="162">16.2 为什么用全局单例</h3>
+<p>RAG 知识库初始化比较耗时，包括加载 embedding 模型、加载 FAISS、构建 BM25 等。如果每个用户会话都重新初始化，性能很差。</p>
+<p>全局单例的好处：</p>
+<ol>
+<li>避免重复加载模型和索引。</li>
+<li>多个用户共享同一份知识库。</li>
+<li>提升页面刷新后的响应速度。</li>
+</ol>
+<p>需要注意：如果生产环境有多进程部署，每个进程仍会有自己的内存实例。更进一步可以把向量库和缓存放到独立服务。</p>
+<h3 id="163">16.3 会话级历史记录</h3>
+<p>虽然知识库是全局共享的，但聊天历史是每个用户独立的：</p>
+<pre><code class="language-python">cl.user_session.set(&quot;chat_history&quot;, [])
+</code></pre>
+<p>每次回答后追加：</p>
+<pre><code class="language-python">chat_history.append((&quot;human&quot;, message.content))
+chat_history.append((&quot;ai&quot;, full_response))
+</code></pre>
+<p>并保留最近 10 条：</p>
+<pre><code class="language-python">if len(chat_history) &gt; 10:
+    chat_history = chat_history[-10:]
+</code></pre>
+<p>这避免不同用户之间串话。</p>
+<h3 id="164-step">16.4 Step 展示</h3>
+<p>Chainlit 中使用 <code>cl.Step</code> 展示处理过程：</p>
+<ol>
+<li>正在分析您的需求。</li>
+<li>正在翻阅菜谱库。</li>
+<li>正在为您生成回答。</li>
+</ol>
+<p>每个 Step 会输出当前阶段状态，例如识别到的过滤条件、找到的参考菜谱名称等。</p>
+<p>这属于可解释性和用户体验优化。用户能看到系统不是直接“凭空回答”，而是经历了分析和检索。</p>
+<h3 id="165">16.5 异步与同步桥接</h3>
+<p>Chainlit 是异步事件模型，但 RAG 初始化和 LLM 调用多数是同步操作。代码使用：</p>
+<pre><code class="language-python">await asyncio.to_thread(...)
+</code></pre>
+<p>把耗时同步任务放到线程中执行，避免阻塞 UI。</p>
+<p>面试回答话术：</p>
+<p>“前端框架是 async 的，但底层 LangChain 和模型调用很多是同步的。如果直接在 async handler 里执行，会阻塞事件循环，导致页面状态不刷新。所以我用 asyncio.to_thread 把初始化、路由、检索等同步任务放到后台线程里执行。”</p>
+<h2 id="17">17. 命令行交互模式</h2>
+<p>除了 Chainlit Web UI，<code>main.py</code> 里还保留了命令行交互：</p>
+<pre><code class="language-python">run_interactive()
+</code></pre>
+<p>它会：</p>
+<ol>
+<li>初始化系统。</li>
+<li>构建知识库。</li>
+<li>循环读取用户输入。</li>
+<li>让用户选择是否流式输出。</li>
+<li>调用 <code>ask_question()</code> 返回答案。</li>
+</ol>
+<p>这个模式适合本地调试，不依赖 Web 页面。</p>
+<p>面试时可以说：</p>
+<p>“我保留了 CLI 模式作为最小可运行入口，方便排查 RAG 主链路。Web UI 出问题时，可以先用 CLI 判断是界面问题还是后端 RAG 逻辑问题。”</p>
+<h2 id="18">18. 辅助能力</h2>
+<h3 id="181">18.1 按分类搜索菜品</h3>
+<p><code>search_by_category(category, query="")</code> 会使用：</p>
+<pre><code class="language-python">filters = {&quot;category&quot;: category}
+metadata_filtered_search(...)
+</code></pre>
+<p>然后从结果中提取去重菜名。</p>
+<p>这个功能适合做快捷入口，例如“早餐”“素菜”“汤品”按钮。</p>
+<h3 id="182">18.2 查询指定菜品食材</h3>
+<p><code>get_ingredients_list(dish_name)</code> 会先检索菜名，再调用基础回答生成：</p>
+<pre><code class="language-python">generate_basic_answer(f&quot;{dish_name}需要什么食材？&quot;, docs)
+</code></pre>
+<p>这是一个面向具体任务的封装函数。</p>
+<h3 id="183">18.3 统计信息</h3>
+<p><code>get_statistics()</code> 会统计：</p>
+<ol>
+<li>文档总数。</li>
+<li>文本块总数。</li>
+<li>分类分布。</li>
+<li>难度分布。</li>
+<li>平均 chunk 长度。</li>
+</ol>
+<p>这类信息可以帮助评估知识库规模，也方便调试切分效果。</p>
+<h3 id="184">18.4 元数据导出</h3>
+<p><code>export_metadata(output_path)</code> 可以把文档元数据导出为 JSON，包括来源路径、菜名、分类、难度、正文长度。</p>
+<p>这适合后续做数据质量检查，例如检查哪些文档难度未知、哪些分类不在映射中。</p>
+<h2 id="19">19. 面试高频问题与回答</h2>
+<h3 id="191-rag">19.1 你这个 RAG 系统的完整流程是什么？</h3>
+<p>回答：</p>
+<p>“用户问题进入系统后，先由 LLM 做查询路由，判断是推荐列表、具体做法还是一般问题。对于非列表问题，会结合最近几轮对话做 query rewrite，补全省略主语。然后系统从问题中抽取分类、难度等元数据过滤条件。如果有过滤条件，就执行带过滤的混合检索；否则执行普通混合检索。混合检索包括 FAISS 向量检索和 BM25 关键词检索，之后用 RRF 融合重排。检索返回的是 chunk，系统再通过 parent_id 找回完整食谱文档，最后根据路由类型选择列表回答、基础回答或分步骤回答，并通过 Chainlit 流式展示给用户。”</p>
+<h3 id="192">19.2 为什么要用混合检索？</h3>
+<p>回答：</p>
+<p>“向量检索擅长语义相似，但对具体菜名、食材名、调料名这类关键词不一定稳定。BM25 擅长词面匹配，但不理解语义。食谱场景既有语义需求，比如‘简单家常菜’，也有精确词需求，比如‘鱼香肉丝’或‘土豆’。所以我把 FAISS 向量检索和 BM25 结合，再用 RRF 做排名融合。”</p>
+<h3 id="193-rrf">19.3 为什么用 RRF，而不是直接加权两个分数？</h3>
+<p>回答：</p>
+<p>“向量相似度和 BM25 分数不是一个尺度，直接加权会有归一化问题。RRF 只依赖排名，不依赖原始分数。一个文档如果在两路检索中排名都靠前，就会得到更高融合分数。这种方式实现简单，对多检索器融合比较稳定。”</p>
+<h3 id="194">19.4 为什么要做父子文档映射？</h3>
+<p>回答：</p>
+<p>“因为检索和生成适合不同粒度。检索时 chunk 越聚焦越容易匹配问题，但生成时只给 chunk 可能信息不完整。比如检索命中‘操作’章节，但回答做法还需要原料和工具。所以我检索子块，再根据 parent_id 找回完整食谱，让生成阶段有完整上下文。”</p>
+<h3 id="195">19.5 如何减少幻觉？</h3>
+<p>回答：</p>
+<p>“主要从三方面控制。第一，回答 Prompt 明确要求根据食谱信息回答，信息不足要诚实说明。第二，列表推荐不让 LLM 编造，而是直接从检索文档的 dish_name 元数据里提取。第三，使用混合检索、元数据过滤和父文档召回提高上下文相关性。RAG 系统里，减少幻觉的关键不是只靠 Prompt，而是先保证检索上下文正确。”</p>
+<h3 id="196">19.6 如何处理多轮对话？</h3>
+<p>回答：</p>
+<p>“Chainlit 的 user_session 里维护每个用户自己的 chat_history。每次请求会把最近几轮历史传给 query_rewrite。如果用户问‘这个怎么做’这类省略主语的问题，模型会参考历史记录补全菜品名，再拿重写后的查询去检索。回答生成时，流式 Prompt 里也带了 MessagesPlaceholder，可以把历史消息传给模型。”</p>
+<h3 id="197">19.7 如何做知识库持久化？</h3>
+<p>回答：</p>
+<p>“持久化分两部分。文档解析状态，包括 documents、chunks、parent_child_map、file_hashes，会用 pickle 保存到 knowledge_cache.pkl。向量索引用 FAISS 的 save_local 保存到 vector_index。启动时先尝试加载索引和缓存，如果都存在且文件无变化，就直接复用，实现快速启动。”</p>
+<h3 id="198">19.8 当前增量更新做到了什么程度？</h3>
+<p>回答：</p>
+<p>“当前已经能检测哪些 Markdown 文件新增或修改，基于文件修改时间做指纹。但发现变化后，为了保证正确性，目前会重新加载文档并重建索引。严格说这是变更检测加重建，不是完全局部增量。后续可以把 chunk_id 和向量库 ID 对齐，支持新增、删除、修改的局部更新，或者换成更支持增删改的向量数据库。”</p>
+<h3 id="199">19.9 如果检索不准，你会怎么排查？</h3>
+<p>回答：</p>
+<p>“我会按链路逐步排查。第一看 query router 是否分类错误。第二看 query rewrite 是否把问题改坏。第三看元数据过滤是否过严导致召回为空。第四分别查看向量检索和 BM25 的 top results，看是语义召回问题还是关键词召回问题。第五检查 chunk 切分是否过碎或缺少标题。第六评估 embedding 模型是否适合当前中文领域。如果还不够，可以加 reranker 或调整 top_k。”</p>
+<h3 id="1910-10">19.10 如果数据规模扩大 10 倍，怎么优化？</h3>
+<p>回答：</p>
+<p>“首先会把 FAISS 本地索引迁移到专用向量数据库，例如 Milvus、Qdrant 或 Elasticsearch/OpenSearch 向量检索，支持分片、持久化、过滤和增删改。第二会做真正增量更新，避免重建全量索引。第三会增加 reranker，把初召回 top_k 提大，再用交叉编码器重排。第四会做更好的中文分词和结构化字段抽取，例如食材、做法、菜系。第五会给查询路由、检索结果和生成结果加日志和评估集，持续评估 recall、precision 和 answer faithfulness。”</p>
+<h3 id="1911-deepseek">19.11 为什么选择 DeepSeek？</h3>
+<p>回答：</p>
+<p>“DeepSeek 提供 OpenAI 兼容接口，接入成本低，可以直接用 LangChain 的 ChatOpenAI，通过 base_url 指向 DeepSeek API。它中文能力较好，成本也适合应用原型。代码里模型名来自配置，所以后续可以替换成其他兼容模型。”</p>
+<h3 id="1912-chatbot">19.12 这个项目和普通 ChatBot 的区别是什么？</h3>
+<p>回答：</p>
+<p>“普通 ChatBot 主要依赖模型自身知识，而这个项目是知识库增强。模型回答前必须先检索本地食谱文档，答案基于文档上下文生成。这样能回答模型训练数据里未必包含的本地菜谱，也能把推荐结果限制在知识库范围内，减少编造。”</p>
+<h2 id="20">20. 当前代码的风险点与可优化方向</h2>
+<h3 id="201">20.1 依赖清单不完整</h3>
+<p><code>requirements.txt</code> 中包含 LangChain、FAISS、sentence-transformers、openai 等依赖，但当前 Web UI 还需要：</p>
+<pre><code class="language-text">chainlit
+python-dotenv
+</code></pre>
+<p>如果新环境安装依赖，可能会因为缺少这两个包而启动失败。</p>
+<h3 id="202-bm25">20.2 中文 BM25 分词问题</h3>
+<p>当前使用 <code>BM25Retriever.from_documents()</code>，没有显式中文分词。中文文本没有天然空格，BM25 可能无法发挥最佳效果。</p>
+<p>优化方向：</p>
+<ol>
+<li>接入 jieba 分词。</li>
+<li>对菜名、食材名维护词典。</li>
+<li>使用支持中文分析器的 Elasticsearch/OpenSearch。</li>
+</ol>
+<h3 id="203">20.3 真正增量更新还未完成</h3>
+<p>当前检测到文件变化后会重建索引。后续可以：</p>
+<ol>
+<li>为每个 chunk 生成稳定 ID。</li>
+<li>维护 chunk_id 到向量库 ID 的映射。</li>
+<li>新增文档调用 add。</li>
+<li>修改文档先删除旧 chunk 再插入新 chunk。</li>
+<li>删除文档时同步删除对应向量。</li>
+</ol>
+<h3 id="204-allow_dangerous_deserializationtrue">20.4 <code>allow_dangerous_deserialization=True</code></h3>
+<p>FAISS 加载时设置了：</p>
+<pre><code class="language-python">allow_dangerous_deserialization=True
+</code></pre>
+<p>这在本地可信文件场景可以接受，但生产环境要谨慎，因为反序列化不可信文件存在安全风险。</p>
+<p>面试时可以说明：</p>
+<p>“这是 LangChain 加载本地 FAISS pickle 元数据的要求。生产环境要确保索引文件来源可信，或者改用更安全的持久化方案。”</p>
+<h3 id="205-category-labels-set">20.5 category labels 使用 set 导致顺序不稳定</h3>
+<p>代码中：</p>
+<pre><code class="language-python">CATEGORY_LABELS = list(set(CATEGORY_MAPPING.values()))
+</code></pre>
+<p><code>set</code> 会导致顺序不稳定。虽然功能不一定受影响，但如果要做展示或稳定匹配，建议改成：</p>
+<pre><code class="language-python">CATEGORY_LABELS = list(CATEGORY_MAPPING.values())
+</code></pre>
+<h3 id="206-chainlit">20.6 Chainlit 中有未使用函数</h3>
+<p><code>web_ui_recipe.py</code> 中定义了：</p>
+<pre><code class="language-python">def fetch_chunks():
+    return [chunk for chunk in generator]
+</code></pre>
+<p>但后面实际没有使用。可以删除，保持代码简洁。</p>
+<h3 id="207">20.7 流式生成仍可能阻塞事件循环</h3>
+<p>虽然部分同步操作用了 <code>asyncio.to_thread</code>，但生成器遍历这里：</p>
+<pre><code class="language-python">for chunk in generator:
+    await response_msg.stream_token(chunk)
+</code></pre>
+<p>底层模型调用如果是同步阻塞，仍可能影响异步事件循环。后续可以改成异步流式 API，或者用队列把同步生成线程和异步 UI 消费解耦。</p>
+<h3 id="208-prompt">20.8 Prompt 上下文长度固定为字符数</h3>
+<p><code>_build_context()</code> 用 <code>max_length=2000</code> 按字符数截断，而不是按 token 截断。生产环境更建议使用 tokenizer 估算 token 数，避免超出模型上下文窗口，也能更精确控制成本。</p>
+<h2 id="21">21. 可以扩展成更强项目的方向</h2>
+<h3 id="211-reranker">21.1 引入 reranker</h3>
+<p>当前是向量 + BM25 + RRF。后续可以在融合召回后加入 reranker，例如 bge-reranker，流程变成：</p>
+<pre><code class="language-text">向量/BM25 初召回 -&gt; RRF 融合 -&gt; reranker 精排 -&gt; 父文档召回 -&gt; 生成
+</code></pre>
+<p>reranker 能更准确判断 query 和候选文档的相关性。</p>
+<h3 id="212">21.2 使用结构化食材抽取</h3>
+<p>可以从 Markdown 中抽取：</p>
+<ol>
+<li>食材。</li>
+<li>调料。</li>
+<li>烹饪方式。</li>
+<li>菜系。</li>
+<li>口味。</li>
+<li>是否需要烤箱、空气炸锅等工具。</li>
+</ol>
+<p>这些字段可以进入元数据或知识图谱，让用户能问：</p>
+<pre><code class="language-text">家里有土豆和番茄，能做什么？
+有没有不放辣椒的荤菜？
+推荐几道需要炖的菜。
+</code></pre>
+<h3 id="213-graphrag">21.3 GraphRAG</h3>
+<p>可以构建图谱：</p>
+<pre><code class="language-text">菜谱 -&gt; 包含 -&gt; 食材
+菜谱 -&gt; 属于 -&gt; 分类
+菜谱 -&gt; 使用 -&gt; 烹饪技法
+菜谱 -&gt; 具有 -&gt; 难度
+</code></pre>
+<p>当用户问复杂约束问题时，先做实体识别和图谱查询，再结合向量检索。</p>
+<h3 id="214">21.4 多模态能力</h3>
+<p>可以让用户上传图片：</p>
+<ol>
+<li>上传菜品图片，识别可能的菜名。</li>
+<li>上传食材图片，识别食材组合。</li>
+<li>根据识别结果检索菜谱。</li>
+<li>生成制作建议。</li>
+</ol>
+<h3 id="215">21.5 评估体系</h3>
+<p>生产级 RAG 需要评估：</p>
+<ol>
+<li>检索召回率。</li>
+<li>检索准确率。</li>
+<li>rerank 后 MRR 或 NDCG。</li>
+<li>回答忠实度。</li>
+<li>答案完整性。</li>
+<li>用户满意度。</li>
+</ol>
+<p>可以构建一批标准问题，例如：</p>
+<pre><code class="language-text">宫保鸡丁怎么做？
+推荐几个简单素菜。
+鱼香肉丝需要什么食材？
+这个菜难不难？
+</code></pre>
+<p>然后人工标注期望召回文档，定期跑评估。</p>
+<h2 id="22">22. 面试时建议强调的亮点</h2>
+<ol>
+<li>不是简单调用 LLM，而是完整 RAG 工程链路。</li>
+<li>使用 Markdown 结构化切分，符合食谱文档特点。</li>
+<li>使用父子文档映射，兼顾检索精度和生成完整性。</li>
+<li>使用 FAISS 做本地持久化，降低启动成本。</li>
+<li>使用 BM25 + 向量检索 + RRF，提升召回稳定性。</li>
+<li>支持元数据过滤，提高推荐类问题准确性。</li>
+<li>有查询路由，能根据问题类型选择不同回答策略。</li>
+<li>有多轮对话历史和 query rewrite，能处理上下文指代。</li>
+<li>Web UI 展示分析、检索、生成过程，用户体验更好。</li>
+<li>能清楚说出当前不足和下一步优化，而不是只讲优点。</li>
+</ol>
+<h2 id="23">23. 快速背诵版</h2>
+<p>如果面试官让你 1 分钟介绍项目，可以说：</p>
+<p>“我做的是一个食谱领域的 RAG 系统。数据来自本地 Markdown 菜谱，我先把每篇菜谱加载成 LangChain Document，并根据路径和内容抽取菜品分类、名称、难度等元数据。切分时没有用固定长度，而是用 MarkdownHeaderTextSplitter 按标题结构切分，并维护 parent-child 映射。索引用 bge-small-zh-v1.5 生成中文向量，存入 FAISS，并支持本地持久化和缓存加载。检索时结合 FAISS 语义检索和 BM25 关键词检索，用 RRF 融合结果，再根据分类和难度做元数据过滤。用户问题进入系统后，会先通过 LLM 做查询路由，必要时结合历史对话做 query rewrite，最后把召回到的完整父文档作为上下文交给 DeepSeek 生成回答。前端用 Chainlit 实现聊天、流式输出和检索步骤展示。”</p>
+<p>如果面试官追问项目亮点，可以说：</p>
+<p>“我觉得这个项目的重点不是单纯接了一个大模型，而是把 RAG 里的几个关键工程点串起来了：结构化切分、父子文档映射、混合检索、RRF 重排、元数据过滤、查询路由、上下文改写和流式交互。这些设计都是为了解决实际应用中的召回准确性、回答完整性和用户体验问题。”</p>
+<h2 id="24">24. 结论</h2>
+<p>这个 C8 项目已经具备一个完整 RAG 应用的主要组成部分：数据解析、切分、向量化、索引持久化、混合检索、重排、元数据过滤、查询改写、大模型生成和 Web 交互。它非常适合作为 AI 开发岗位面试项目，因为它覆盖了 LLM 应用开发中常见的核心问题：如何组织知识库、如何提高检索质量、如何减少幻觉、如何处理多轮对话、如何做系统工程化和用户体验优化。</p>
+<p>面试准备时，不需要死记所有代码细节，但要能围绕一条主线讲清楚：</p>
+<pre><code class="language-text">文档怎么进来 -&gt; 怎么切 -&gt; 怎么建索引 -&gt; 怎么检索 -&gt; 怎么过滤和重排 -&gt; 怎么生成 -&gt; 怎么展示 -&gt; 有什么不足和优化方向
+</code></pre>
+<p>只要这条主线讲顺，面试官继续追问某个点时，就能自然展开到对应模块的实现细节。</p>
+  </main>
+</body>
+</html>
