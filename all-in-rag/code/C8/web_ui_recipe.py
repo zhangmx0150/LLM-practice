@@ -35,8 +35,6 @@ async def on_chat_start():
             await msg.update()
             # 在后台线程加载，防止阻塞
             global_rag_system = await asyncio.to_thread(init_system)
-
-        # 如果全局变量不为空（比如你只是刷新了网页），直接复用
         else:
             print("⚡ 检测到全局知识库已存在，直接复用内存实例！")
 
@@ -56,53 +54,114 @@ async def on_chat_start():
 # ==========================================
 @cl.on_message
 async def on_message(message: cl.Message):
-    # 从 session 中取出我们的 RAG 系统
     system = cl.user_session.get("rag_system")
-    # 取出当前用户的历史记录
     chat_history = cl.user_session.get("chat_history", [])
 
     if not system:
         await cl.Message(content="系统尚未初始化完成，请刷新页面重试。").send()
         return
 
-    # 准备一个空消息对象，用于一会的流式输出
+    # 准备最终的回复消息对象
     response_msg = cl.Message(content="")
-    full_response = "" # 用于拼接大模型最终的回答以存入记忆
+    full_response = ""
 
     try:
-        # 把历史记录传给后端的 ask_question，开启流式输出
-        response = system.ask_question(message.content, stream=True, chat_history=chat_history)
+        # ---------------------------------------------------------
+        # 步骤 1：意图分析与查询重写
+        # ---------------------------------------------------------
+        async with cl.Step(name="🤔 正在分析您的需求...") as step_analyze:
+            # 使用 to_thread 避免同步请求阻塞 UI 动画
+            route_type = await asyncio.to_thread(system.generation_module.query_router, message.content)
 
-        # 兼容性处理：如果返回的是纯字符串（比如找不到菜谱时的提示）
-        if isinstance(response, str):
-            full_response = response
-            response_msg.content = full_response
+            if route_type == 'list':
+                rewritten_query = message.content
+                step_analyze.output = f"意图识别：菜品推荐/列表查询"
+            else:
+                step_analyze.output = "结合上下文智能分析查询意图中..."
+                rewritten_query = await asyncio.to_thread(
+                    system.generation_module.query_rewrite, message.content, chat_history
+                )
+                if rewritten_query != message.content:
+                    step_analyze.output = f"意图识别：具体制作查询\n上下文补全：'{message.content}' ➡️ '{rewritten_query}'"
+                else:
+                    step_analyze.output = f"意图识别：具体制作查询"
+
+        # ---------------------------------------------------------
+        # 步骤 2：向量库检索
+        # ---------------------------------------------------------
+        async with cl.Step(name="🔍 正在翻阅菜谱库...") as step_retrieval:
+            filters = system._extract_filters_from_query(message.content)
+
+            if filters:
+                step_retrieval.output = f"识别到过滤条件: {filters}\n正在进行精确检索..."
+                relevant_chunks = await asyncio.to_thread(
+                    system.retrieval_module.metadata_filtered_search, rewritten_query, filters, top_k=system.config.top_k
+                )
+            else:
+                step_retrieval.output = "正在进行混合语义检索..."
+                relevant_chunks = await asyncio.to_thread(
+                    system.retrieval_module.hybrid_search, rewritten_query, top_k=system.config.top_k
+                )
+
+            if not relevant_chunks:
+                step_retrieval.output = "❌ 未找到相关食谱。"
+                await cl.Message(content="抱歉，厨房里没有找到相关的食谱信息。要不要尝试换个菜名或关键词？").send()
+                return
+
+            # 获取完整文档
+            relevant_docs = await asyncio.to_thread(system.data_module.get_parent_documents, relevant_chunks)
+            doc_names = [doc.metadata.get('dish_name', '未知菜品') for doc in relevant_docs]
+            step_retrieval.output = f"✅ 成功找到参考菜谱：\n" + "\n".join([f"- {name}" for name in doc_names])
+
+        # ---------------------------------------------------------
+        # 步骤 3：模型生成回答
+        # ---------------------------------------------------------
+        async with cl.Step(name="👨‍🍳 正在为您烹饪回答...") as step_generate:
+            step_generate.output = "正在整理制作步骤和技巧，请稍候..."
+
+            # 发送空消息，为流式输出做准备
             await response_msg.send()
 
-        # 如果返回的是流式生成器（详情步骤输出）
-        else:
-            # Chainlit 必须先 send() 一个空消息，然后才能往里面塞数据
-            await response_msg.send()
+            if route_type == 'list':
+                # 列表查询直接返回
+                response = await asyncio.to_thread(
+                    system.generation_module.generate_list_answer, message.content, relevant_docs
+                )
+                full_response = response
+                response_msg.content = full_response
+                await response_msg.update()
+            else:
+                # 获取流式生成器
+                if route_type == "detail":
+                    generator = system.generation_module.generate_step_by_step_answer_stream(message.content, relevant_docs, chat_history)
+                else:
+                    generator = system.generation_module.generate_basic_answer_stream(message.content, relevant_docs, chat_history)
 
-            # 遍历生成器，原生支持流式打印
-            for chunk in response:
-                full_response += chunk
-                await response_msg.stream_token(chunk)
+                # 遍历生成器，实现打字机效果
+                # 把生成过程放到独立线程，通过 asyncio 获取，防止阻塞 UI
+                def fetch_chunks():
+                    return [chunk for chunk in generator]
 
-            # 传输完毕，更新最终状态
-            await response_msg.update()
+                # 注意：为了让流式打印平滑，最好是迭代原生生成器。
+                # 但因为底层的大模型调用是同步的，最安全的做法是将每次获取 chunk 的动作包裹起来
+                for chunk in generator:
+                    full_response += chunk
+                    await response_msg.stream_token(chunk)
 
-        # 核心逻辑：一轮对话结束后，将问答双双追加进记忆里
-        # 使用 ("角色", "内容") 的元组格式，完美适配 LangChain 的 MessagesPlaceholder
+                await response_msg.update()
+
+            step_generate.output = "✅ 回答生成完毕！"
+
+        # ---------------------------------------------------------
+        # 步骤 4：历史记录管理
+        # ---------------------------------------------------------
         chat_history.append(("human", message.content))
         chat_history.append(("ai", full_response))
 
-        # 限制记忆长度（例如只保留最近的 5 轮对话 / 10条消息，防止Token超载报错）
         if len(chat_history) > 10:
             chat_history = chat_history[-10:]
 
-        # 重新存回 session
         cl.user_session.set("chat_history", chat_history)
 
     except Exception as e:
-        await cl.Message(content=f"❌ 处理问题时出错: {str(e)}").send()
+        await cl.Message(content=f"❌ 厨房出现了一点小意外: {str(e)}").send()

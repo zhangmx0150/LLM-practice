@@ -15,7 +15,7 @@ class RAGConfig:
 
     # 模型配置
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
-    llm_model: str = "qwen3.6-plus"
+    llm_model: str = "deepseek-chat"
 
     # 检索配置
     top_k: int = 3
