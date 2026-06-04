@@ -8,8 +8,7 @@ import os
 import json
 import sys
 import argparse
-from datetime import datetime
-from recipe_ai_agent import QwenRecipeAgent, RecipeKnowledgeGraphBuilder
+from recipe_ai_agent import DeepSeekRecipeAgent, RecipeKnowledgeGraphBuilder
 
 def load_config():
     """加载配置文件"""
@@ -102,7 +101,7 @@ def merge_batches(output_dir: str):
         return
     
     try:
-        ai_agent = QwenRecipeAgent(api_key)
+        ai_agent = DeepSeekRecipeAgent(api_key)
         builder = RecipeKnowledgeGraphBuilder(ai_agent, output_dir)
         
         print("合并批次数据...")
@@ -131,7 +130,7 @@ def continue_processing(recipe_dir: str, output_dir: str):
         return
     
     try:
-        ai_agent = KimiRecipeAgent(api_key)
+        ai_agent = DeepSeekRecipeAgent(api_key)
         batch_size = config.get("processing", {}).get("batch_size", 20)
         builder = RecipeKnowledgeGraphBuilder(ai_agent, output_dir, batch_size)
         

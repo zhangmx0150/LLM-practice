@@ -58,7 +58,7 @@ class RecipeInfo:
         if self.nutrition_info is None:
             self.nutrition_info = {}
 
-class QwenRecipeAgent:
+class DeepSeekRecipeAgent:
     """Qwen菜谱解析AI Agent"""
     
     def __init__(self, api_key: str, base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"):
@@ -309,7 +309,7 @@ class QwenRecipeAgent:
 class RecipeKnowledgeGraphBuilder:
     """菜谱知识图谱构建器 - 支持分批保存和断点续传"""
     
-    def __init__(self, ai_agent: QwenRecipeAgent, output_dir: str = "./ai_output", batch_size: int = 20):
+    def __init__(self, ai_agent: DeepSeekRecipeAgent, output_dir: str = "./ai_output", batch_size: int = 20):
         self.ai_agent = ai_agent
         self.concepts = []
         self.relationships = []
@@ -1317,7 +1317,7 @@ def main():
     
     # 创建AI agent
     print("初始化Qwen AI Agent...")
-    ai_agent = QwenRecipeAgent(args.api_key, args.base_url)
+    ai_agent = DeepSeekRecipeAgent(args.api_key, args.base_url)
     
     # 创建知识图谱构建器
     builder = RecipeKnowledgeGraphBuilder(ai_agent, args.output)

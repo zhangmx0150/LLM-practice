@@ -17,16 +17,16 @@ class GenerationIntegrationModule:
     """生成集成模块 - 负责答案生成"""
 
     def __init__(
-        self,
-        model_name: str = "qwen3.6-plus",
-        temperature: float = 0.1,
-        max_tokens: int = 2048,
-        cache_enabled: bool = True,
-        answer_cache_max_size: int = 128,
-        answer_cache_ttl_seconds: int = 1800,
+            self,
+            model_name: str = "deepseek-chat",
+            temperature: float = 0.1,
+            max_tokens: int = 2048,
+            cache_enabled: bool = True,
+            answer_cache_max_size: int = 128,
+            answer_cache_ttl_seconds: int = 1800,
     ):
         """
-        初始化生成集成模块，创建 DashScope/OpenAI 兼容客户端和答案缓存。
+        初始化生成集成模块，创建 OpenAI 兼容客户端(连接 DeepSeek)和答案缓存。
         """
         self.model_name = model_name
         self.temperature = temperature
@@ -36,15 +36,15 @@ class GenerationIntegrationModule:
             ttl_seconds=answer_cache_ttl_seconds,
             enabled=cache_enabled,
         )
-        
-        # 初始化OpenAI客户端
-        api_key = os.getenv("DASHSCOPE_API_KEY")
+
+        # 🔄 初始化OpenAI客户端连接 DeepSeek
+        api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
-            raise ValueError("请设置 DASHSCOPE_API_KEY 环境变量")
-        
+            raise ValueError("请设置 DEEPSEEK_API_KEY 环境变量")
+
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+            base_url="https://api.deepseek.com"
         )
 
         logger.info(f"生成模块初始化完成，模型: {model_name}")
@@ -112,7 +112,7 @@ class GenerationIntegrationModule:
             return cached_answer
 
         prompt = self._build_prompt(question, documents)
-        
+
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -126,7 +126,7 @@ class GenerationIntegrationModule:
             answer = response.choices[0].message.content.strip()
             self.answer_cache.set(cache_key, answer)
             return answer
-            
+
         except Exception as e:
             logger.error(f"LightRAG答案生成失败: {e}")
             return f"抱歉，生成回答时出现错误：{str(e)}"
